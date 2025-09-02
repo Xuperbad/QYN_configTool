@@ -1,0 +1,6 @@
+{   
+    "use":"dev",
+    "ver":{"projDir":"..\\..\\..\\qyn_client\\qyn","protoFile":"protocol\\testData.json","clientExcel":"client_ver.xls","langFile":"lang_ver.json"},
+    "dev":{"projDir":"..\\..\\..\\qyn_client\\qyn","protoFile":"protocol\\testData.json","clientExcel":"client_dev.xls","langFile":"lang_test.json"},
+    "main":{"projDir":"..\\..\\..\\qyn_client\\qyn","protoFile":"protocol\\testData.json","clientExcel":"client_main.xls","langFile":"lang_main.json"}
+}
