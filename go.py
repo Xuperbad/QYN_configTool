@@ -378,11 +378,11 @@ class ExcelTextReplacer:
                     if not id_content and result['id']:
                         id_content = result['id']
 
-                    # 输出格式：文件名 第X行: ID, 中文内容
+                    # 输出格式：文件名[工作表名] 第X行: ID, 中文内容
                     if chinese_content:
-                        print(f"{result['file']} 第{result['row']}行: {id_content}, {chinese_content}")
+                        print(f"{result['file']}[{result['sheet']}] 第{result['row']}行: {id_content}, {chinese_content}")
                     else:
-                        print(f"{result['file']} 第{result['row']}行: {id_content}")
+                        print(f"{result['file']}[{result['sheet']}] 第{result['row']}行: {id_content}")
         else:
             print(f"\n未找到包含 '{search_text}' 的内容")
 
@@ -584,7 +584,7 @@ class ExcelTextReplacer:
 
                 # 格式化输出替换信息
                 col_name = "ID" if replacement['col'] == 1 else "中文名称"
-                print(f"  第{replacement['row']}行({col_name}): {replacement['id']},{replacement['col']},{replacement['before']} -> {replacement['id']},{replacement['col']},{replacement['after']}")
+                print(f"  [{replacement['sheet']}] 第{replacement['row']}行({col_name}): {replacement['id']},{replacement['col']},{replacement['before']} -> {replacement['id']},{replacement['col']},{replacement['after']}")
 
         print("\n" + "="*80)
 
