@@ -358,25 +358,9 @@ class ExcelTextReplacer:
                 if row_key not in processed_rows:
                     processed_rows.add(row_key)
 
-                    # 查找同一行的其他匹配结果
-                    same_row_results = [r for r in self.search_results
-                                      if r['file'] == result['file'] and
-                                         r['sheet'] == result['sheet'] and
-                                         r['row'] == result['row']]
-
                     # 获取ID和中文内容
-                    id_content = ""
-                    chinese_content = ""
-
-                    for r in same_row_results:
-                        if r['col'] == 1:  # 第1列是ID
-                            id_content = r['content']
-                        elif r['col'] == 3:  # 第3列是中文内容
-                            chinese_content = r['content']
-
-                    # 如果没有找到ID，使用存储的id值
-                    if not id_content and result['id']:
-                        id_content = result['id']
+                    id_content = result['id'] if result['id'] else ""
+                    chinese_content = result.get('chinese_content', "")
 
                     # 输出格式：文件名[工作表名] 第X行: ID, 中文内容
                     if chinese_content:
@@ -424,31 +408,26 @@ class ExcelTextReplacer:
                                 found_match = True
                                 break
 
-                    # 如果找到匹配，添加完整的行信息
+                    # 如果找到匹配，添加一个包含完整行信息的结果
                     if found_match:
-                        # 添加ID列信息
-                        if id_value:
-                            self.search_results.append({
-                                'file': file_name,
-                                'sheet': sheet_name,
-                                'row': row_idx + 1,
-                                'col': 1,
-                                'id': id_value,
-                                'content': id_value,
-                                'search_text': search_text
-                            })
+                        # 确定哪一列包含搜索文本
+                        matched_col = 0
+                        if id_value and search_text in id_value:
+                            matched_col = 1
+                        elif chinese_value and search_text in chinese_value:
+                            matched_col = 3
 
-                        # 添加中文内容列信息
-                        if chinese_value:
-                            self.search_results.append({
-                                'file': file_name,
-                                'sheet': sheet_name,
-                                'row': row_idx + 1,
-                                'col': 3,
-                                'id': id_value,
-                                'content': chinese_value,
-                                'search_text': search_text
-                            })
+                        # 添加搜索结果，包含完整的行信息
+                        self.search_results.append({
+                            'file': file_name,
+                            'sheet': sheet_name,
+                            'row': row_idx + 1,
+                            'col': matched_col,
+                            'id': id_value,
+                            'content': chinese_value if matched_col == 3 else id_value,
+                            'chinese_content': chinese_value,  # 总是保存中文内容用于显示
+                            'search_text': search_text
+                        })
 
             workbook.close()
         except Exception as e:
@@ -490,31 +469,26 @@ class ExcelTextReplacer:
                                     found_match = True
                                     break
 
-                    # 如果找到匹配，添加完整的行信息
+                    # 如果找到匹配，添加一个包含完整行信息的结果
                     if found_match:
-                        # 添加ID列信息
-                        if id_value:
-                            self.search_results.append({
-                                'file': file_name,
-                                'sheet': sheet_name,
-                                'row': row_idx + 1,
-                                'col': 1,
-                                'id': id_value,
-                                'content': id_value,
-                                'search_text': search_text
-                            })
+                        # 确定哪一列包含搜索文本
+                        matched_col = 0
+                        if id_value and search_text in id_value:
+                            matched_col = 1
+                        elif chinese_value and search_text in chinese_value:
+                            matched_col = 3
 
-                        # 添加中文内容列信息
-                        if chinese_value:
-                            self.search_results.append({
-                                'file': file_name,
-                                'sheet': sheet_name,
-                                'row': row_idx + 1,
-                                'col': 3,
-                                'id': id_value,
-                                'content': chinese_value,
-                                'search_text': search_text
-                            })
+                        # 添加搜索结果，包含完整的行信息
+                        self.search_results.append({
+                            'file': file_name,
+                            'sheet': sheet_name,
+                            'row': row_idx + 1,
+                            'col': matched_col,
+                            'id': id_value,
+                            'content': chinese_value if matched_col == 3 else id_value,
+                            'chinese_content': chinese_value,  # 总是保存中文内容用于显示
+                            'search_text': search_text
+                        })
         except Exception as e:
             print(f"搜索文件 {file_path} 时出错: {str(e)}")
 
