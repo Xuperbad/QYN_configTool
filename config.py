@@ -344,8 +344,9 @@ class ExcelToCSVConverter:
 
                 print(f"找到 {len(all_ids)} 个唯一ID，正在查找对应值...")
 
-                # 使用go.py的方法查找对应值
-                lookup_results = replacer.lookup_field_values(
+                # 使用并发优化的查找方法
+                lookup_results = self._lookup_field_values_concurrent(
+                    replacer,
                     str(target_file_path),
                     target_sheet_name,
                     match_column,
@@ -386,6 +387,48 @@ class ExcelToCSVConverter:
 
         print("预预处理完成")
         return df_processed
+
+    def _lookup_field_values_concurrent(self, replacer, file_path, sheet_name, match_column, return_column, search_values):
+        """并发优化的字段值查找方法"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import multiprocessing
+
+        if not search_values:
+            return {}
+
+        # 动态调整线程数
+        cpu_count = multiprocessing.cpu_count()
+        max_workers = min(max(cpu_count * 2, 4), len(search_values), 16)  # 预预处理用较少线程
+
+        print(f"使用 {max_workers} 个线程并发查找字段值...")
+
+        # 将搜索值分批处理
+        batch_size = max(1, len(search_values) // max_workers)
+        batches = [search_values[i:i + batch_size] for i in range(0, len(search_values), batch_size)]
+
+        def lookup_batch(batch_values):
+            """查找一批值"""
+            return replacer.lookup_field_values(file_path, sheet_name, match_column, return_column, batch_values)
+
+        # 并发执行查找
+        all_results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有批次任务
+            future_to_batch = {executor.submit(lookup_batch, batch): batch for batch in batches}
+
+            # 收集结果
+            completed_count = 0
+            for future in as_completed(future_to_batch):
+                batch = future_to_batch[future]
+                try:
+                    batch_results = future.result()
+                    all_results.update(batch_results)
+                    completed_count += len(batch)
+                    print(f"  已完成 {completed_count}/{len(search_values)} 个ID的查找")
+                except Exception as e:
+                    print(f"  批次查找失败: {str(e)}")
+
+        return all_results
 
     def preprocess_dataframe(self, df):
         """预处理DataFrame，将t_*字符串替换为t_*{中文}格式"""
