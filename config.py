@@ -135,46 +135,23 @@ class ExcelToCSVConverter:
         return list(set(t_strings))  # 去重
 
     def search_chinese_text(self, t_string):
-        """调用go.py搜索t_string对应的中文文本"""
+        """直接调用go.py的方法获取t_string对应的中文文本"""
         try:
-            # 使用bytes模式避免编码问题
-            result = subprocess.run(
-                ['python', 'go.py', f'"{t_string}"'],
-                capture_output=True,
-                cwd=Path.cwd(),
-                timeout=15  # 减少超时时间
-            )
+            # 导入go.py模块
+            import sys
+            sys.path.append(str(Path.cwd()))
+            from go import ExcelTextReplacer, TARGET_FOLDER
 
-            if result.returncode == 0 and result.stdout:
-                # 尝试多种编码解码输出
-                output = None
-                encodings = ['utf-8', 'gbk', 'gb2312', 'cp936', 'latin1']
+            # 创建ExcelTextReplacer实例
+            replacer = ExcelTextReplacer({})  # 空的替换配置，因为我们只是用来搜索
 
-                for encoding in encodings:
-                    try:
-                        output = result.stdout.decode(encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
+            # 直接调用新的方法获取中文文本
+            chinese_text = replacer.get_chinese_text_by_id(t_string, TARGET_FOLDER)
 
-                if output:
-                    # 解析输出，查找中文内容
-                    lines = output.split('\n')
-                    for line in lines:
-                        if t_string in line and '行:' in line:
-                            # 格式：文件名[工作表] 第X行: ID, 中文内容
-                            parts = line.split(': ', 1)
-                            if len(parts) > 1:
-                                content_part = parts[1]
-                                if ', ' in content_part:
-                                    chinese_text = content_part.split(', ', 1)[1].strip()
-                                    return chinese_text
-                            break
+            return chinese_text
 
-            return None
-        except subprocess.TimeoutExpired:
-            return None
-        except Exception:
+        except Exception as e:
+            # 如果出现任何错误，返回None
             return None
 
     def search_chinese_text_batch(self, t_strings, max_workers=8):
@@ -241,12 +218,13 @@ class ExcelToCSVConverter:
         # 构建替换映射
         t_string_map = {}
         found_count = 0
-        for t_string, chinese_text in chinese_results.items():
-            if chinese_text:
-                t_string_map[t_string] = f"{t_string}{{{chinese_text}}}"
+        for t_string, search_result in chinese_results.items():
+            if search_result:
+                # search_result 现在只包含中文内容
+                t_string_map[t_string] = f"{t_string}{{{search_result}}}"
                 found_count += 1
             else:
-                t_string_map[t_string] = t_string  # 保持原样
+                t_string_map[t_string] = t_string  # 保持原样（搜索结果不唯一或未找到）
 
         # 替换DataFrame中的内容
         print("正在替换DataFrame中的内容...")

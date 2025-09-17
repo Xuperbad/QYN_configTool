@@ -376,11 +376,11 @@ class ExcelTextReplacer:
                     id_content = result['id'] if result['id'] else ""
                     chinese_content = result.get('chinese_content', "")
 
-                    # 输出格式：文件名[工作表名] 第X行: ID, 中文内容
+                    # 输出格式：文件名[工作表名], 行X: ID, 中文内容
                     if chinese_content:
-                        print(f"{result['file']}[{result['sheet']}] 第{result['row']}行: {id_content}, {chinese_content}")
+                        print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}, {chinese_content}")
                     else:
-                        print(f"{result['file']}[{result['sheet']}] 第{result['row']}行: {id_content}")
+                        print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}")
         else:
             print(f"\n未找到包含 '{search_text}' 的内容")
 
@@ -506,6 +506,108 @@ class ExcelTextReplacer:
         except Exception as e:
             print(f"搜索文件 {file_path} 时出错: {str(e)}")
 
+    def get_chinese_text_by_id(self, search_id, directory=None):
+        """根据ID直接获取对应的中文文本（第3列内容）
+
+        Args:
+            search_id: 要搜索的ID（如 t_heronew_name500001）
+            directory: 搜索目录，如果为None则使用TARGET_FOLDER
+
+        Returns:
+            str: 如果找到唯一结果，返回中文文本；如果结果不唯一或未找到，返回None
+        """
+        if directory is None:
+            directory = TARGET_FOLDER
+
+        if not directory:
+            return None
+
+        excel_files = self.find_excel_files(directory)
+        if not excel_files:
+            return None
+
+        matching_results = []
+
+        for file_path in excel_files:
+            file_extension = Path(file_path).suffix.lower()
+
+            if file_extension == '.xlsx':
+                results = self._search_chinese_in_xlsx(search_id, file_path)
+            elif file_extension == '.xls':
+                results = self._search_chinese_in_xls(search_id, file_path)
+            else:
+                continue
+
+            matching_results.extend(results)
+
+        # 检查结果是否唯一
+        if len(matching_results) == 1:
+            return matching_results[0]['chinese_text']
+        else:
+            # 结果不唯一或未找到
+            return None
+
+    def _search_chinese_in_xlsx(self, search_id, file_path):
+        """在.xlsx文件中搜索ID对应的中文文本"""
+        results = []
+        try:
+            workbook = openpyxl.load_workbook(file_path)
+
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+
+                for row_idx, row in enumerate(sheet.iter_rows()):
+                    # 检查第1列是否匹配搜索ID
+                    if len(row) > 0 and row[0].value is not None:
+                        id_value = str(row[0].value)
+                        if id_value == search_id:
+                            # 获取第3列的中文内容
+                            if len(row) > 2 and row[2].value is not None:
+                                chinese_text = str(row[2].value)
+                                results.append({
+                                    'file': Path(file_path).name,
+                                    'sheet': sheet_name,
+                                    'row': row_idx + 1,
+                                    'chinese_text': chinese_text
+                                })
+
+            workbook.close()
+        except Exception as e:
+            pass
+
+        return results
+
+    def _search_chinese_in_xls(self, search_id, file_path):
+        """在.xls文件中搜索ID对应的中文文本"""
+        results = []
+        try:
+            workbook = xlrd.open_workbook(file_path)
+
+            for sheet_index in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_index)
+                sheet_name = sheet.name
+
+                for row_idx in range(sheet.nrows):
+                    # 检查第1列是否匹配搜索ID
+                    if sheet.ncols > 0:
+                        id_cell_value = sheet.cell_value(row_idx, 0)
+                        if id_cell_value and str(id_cell_value) == search_id:
+                            # 获取第3列的中文内容
+                            if sheet.ncols > 2:
+                                chinese_cell_value = sheet.cell_value(row_idx, 2)
+                                if chinese_cell_value:
+                                    chinese_text = str(chinese_cell_value)
+                                    results.append({
+                                        'file': Path(file_path).name,
+                                        'sheet': sheet_name,
+                                        'row': row_idx + 1,
+                                        'chinese_text': chinese_text
+                                    })
+        except Exception as e:
+            pass
+
+        return results
+
     def get_id_for_row(self, file_name, sheet_name, row_idx):
         """获取指定行的ID值（第1列）"""
         # 从搜索结果中查找对应行的ID
@@ -572,7 +674,7 @@ class ExcelTextReplacer:
 
                 # 格式化输出替换信息
                 col_name = "ID" if replacement['col'] == 1 else "中文名称"
-                print(f"  [{replacement['sheet']}] 第{replacement['row']}行({col_name}): {replacement['id']},{replacement['col']},{replacement['before']} -> {replacement['id']},{replacement['col']},{replacement['after']}")
+                print(f"  [{replacement['sheet']}], 行{replacement['row']}({col_name}): {replacement['id']},{replacement['col']},{replacement['before']} -> {replacement['id']},{replacement['col']},{replacement['after']}")
 
         print("\n" + "="*80)
 
