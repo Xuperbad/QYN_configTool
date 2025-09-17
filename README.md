@@ -15,6 +15,7 @@
 - 自动识别和处理t_*格式的ID字符串
 - 并发查找对应的中文翻译
 - 智能处理唯一性检查
+- **新功能**: 将修改后的CSV文件写回Excel文件
 
 ## 安装依赖
 ```bash
@@ -42,140 +43,106 @@ REPLACEMENT_CONFIG = {
 }
 ```
 
-#### 2. 运行替换操作
+#### 2. 运行替换
 ```bash
-# 处理当前目录下的所有Excel文件
+# 替换当前目录下的所有Excel文件
 python go.py
 
-# 处理指定目录下的所有Excel文件
+# 替换指定目录下的所有Excel文件
 python go.py /path/to/excel/files
 
-# 搜索特定文本
-python go.py "t_heronew_name500001"
+# 搜索文本（精确搜索）
+python go.py "搜索文本"
 
 # 模糊搜索（前缀匹配）
-python go.py "t_hero*"
+python go.py "t_hero_getway*"
 ```
 
 ### Excel转CSV工具 (config.py)
 
-#### 基本用法
+#### 1. 导出Excel工作表为CSV
 ```bash
-# 导出指定工作表为CSV
+# 导出指定Excel文件的指定工作表为CSV
 python config.py filename[sheetname]
 
-# 示例：导出hero.xls文件中的hero工作表
+# 示例：导出hero.xls文件的hero工作表
 python config.py hero[hero]
 ```
 
-#### 功能特点
-- 自动识别t_*格式的ID字符串
-- 并发查找对应的中文翻译（基于CPU核心数自动调整线程数）
-- 智能处理：
-  - 唯一结果：`t_heronew_name500001{五竹}`
-  - 非唯一结果：保持原样 `t_heronew_name500001`
-  - 未找到：保持原样
+这个命令会：
+- 读取 `E:\qyn_game\parseFiles\global\config\test\hero.xls` 文件的 `hero` 工作表
+- 自动识别并处理 `t_*` 格式的ID字符串
+- 并发查找对应的中文翻译，将 `t_heronew_name500001` 转换为 `t_heronew_name500001{五竹}`
+- 将结果保存为 `xls/hero[hero].csv`
+
+#### 2. 将修改后的CSV写回Excel（新功能）
+```bash
+# 将xls文件夹中的所有CSV文件写回对应的Excel文件
+python config.py
+```
+
+这个命令会：
+- 扫描 `xls` 文件夹中的所有CSV文件
+- 解析文件名格式 `filename[sheetname].csv`
+- 将 `t_*{中文}` 格式还原为 `t_*` 格式
+- 将数据写回到对应的Excel文件和工作表中
+
+#### 完整工作流程
+1. **导出**: `python config.py hero[hero]` - 将Excel导出为CSV，带中文注释
+2. **编辑**: 直接编辑 `xls/hero[hero].csv` 文件，修改或添加内容
+3. **写回**: `python config.py` - 将修改后的CSV写回Excel文件
 
 ## 配置说明
 
 ### 目标文件夹配置
-在 `go.py` 和 `config.py` 中都有 `TARGET_FOLDER` 配置：
+在 `config.py` 和 `go.py` 中都有目标文件夹配置：
 
 ```python
-# 目标文件夹路径
+# config.py 中的配置
 TARGET_FOLDER = r"E:\qyn_game\parseFiles\global\config\test"
+
+# go.py 中的配置
+TARGET_FOLDER = r"E:\qyn_game\parseFiles\global\config\test\lang_client"
 ```
 
-根据实际情况修改此路径。
-
-### 输出文件夹配置 (config.py)
-```python
-# 输出文件夹名称（在当前工作目录下创建）
-OUTPUT_FOLDER = "xls"
-```
+根据你的实际路径修改这些配置。
 
 ## 输出说明
 
-### go.py 输出
-- **替换模式**：直接修改原文件
-- **搜索模式**：显示搜索结果，格式为：
-  ```
-  tableLang.xls[functionLang], 行1021: t_heronew_name500001, 五竹
-  ```
+### CSV文件格式
+- CSV文件保存在 `xls` 文件夹中
+- 文件名格式：`filename[sheetname].csv`
+- 包含中文注释的t_*字符串，便于编辑和理解
 
-### config.py 输出
-- **CSV文件**：保存在当前目录的 `xls` 文件夹下
-- **文件名格式**：`原文件名[工作表名].csv`
-- **处理过程**：显示并发搜索进度和替换统计
-
-## 使用示例
-
-### 文本替换示例
-假设Excel文件包含：
-- "人才管理系统"
-- "优秀人才培养"
-
-配置替换规则为 `"人才": "能士"` 后，运行 `python go.py`，结果变为：
-- "能士管理系统"
-- "优秀能士培养"
-
-### CSV导出示例
-```bash
-# 导出hero.xls文件中的hero工作表
-python config.py hero[hero]
-```
-
-处理前的数据：
-```
-ID,Name,Description
-1,t_heronew_name500001,这是一个角色
-```
-
-处理后的数据：
-```
-ID,Name,Description
-1,t_heronew_name500001{五竹},这是一个角色
-```
-
-## 性能优化
-
-### 并发处理
-- `config.py` 支持并发处理，自动根据CPU核心数调整线程数
-- 默认使用 `CPU核心数 × 3` 个线程，最多32个线程
-- 对于大量t_*字符串的处理，可显著提升速度
-
-### 内存优化
-- 直接读取Excel文件，避免字符串解析
-- 使用高效的数据结构存储搜索结果
+### Excel文件更新
+- 原Excel文件会被直接更新
+- 保持原有的文件结构和其他工作表不变
+- 只更新指定的工作表内容
 
 ## 注意事项
 
-1. **备份重要文件**：go.py会直接修改原文件，建议先备份
+1. **文件路径**：确保配置的目标文件夹路径正确
 2. **文件格式**：支持 .xlsx 和 .xls 格式
-3. **样式保持**：go.py会保持原有的字体、颜色、边框等格式
-4. **大小写敏感**：替换和搜索都是大小写敏感的
-5. **唯一性检查**：config.py会检查t_*字符串的唯一性，非唯一结果不会被处理
+3. **备份建议**：在批量处理前建议备份重要文件
+4. **编码格式**：CSV文件使用UTF-8编码，支持中文
+5. **并发处理**：t_*字符串查找使用多线程，提高处理速度
 
 ## 故障排除
 
-### 常见错误：
-1. **ModuleNotFoundError**
-   ```bash
-   pip install openpyxl xlrd pandas
-   ```
-
-2. **文件被占用**
-   - 确保Excel文件没有在其他程序中打开
-
-3. **路径错误**
+### 常见问题：
+1. **找不到Excel文件**
    - 检查 `TARGET_FOLDER` 配置是否正确
-   - 确保目标文件存在
+   - 确认文件名和路径是否存在
 
-4. **编码问题**
-   - 确保Excel文件编码正确
-   - 中文内容应保存为UTF-8格式
+2. **CSV文件格式错误**
+   - 确保CSV文件名格式为 `filename[sheetname].csv`
+   - 检查CSV文件编码是否为UTF-8
 
-### 调试技巧：
-- 使用搜索模式测试：`python go.py "your_search_term"`
-- 查看详细的控制台输出
-- 检查生成的CSV文件内容
+3. **权限错误**
+   - 确保对目标目录有读写权限
+   - 确保Excel文件没有被其他程序占用
+
+4. **依赖包缺失**
+   ```bash
+   pip install pandas openpyxl xlrd xlwt
+   ```
