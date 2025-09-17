@@ -596,9 +596,9 @@ class ExcelTextReplacer:
             return_col_idx = None
 
             for idx, header in enumerate(header_row):
-                if header == match_column:
+                if header == match_column and match_col_idx is None:
                     match_col_idx = idx
-                elif header == return_column:
+                elif header == return_column and return_col_idx is None:
                     return_col_idx = idx
 
             if match_col_idx is None:
@@ -648,15 +648,15 @@ class ExcelTextReplacer:
             if sheet.nrows == 0:
                 return results
 
-            # 获取表头行，找到列索引
+            # 获取表头行，找到列索引（只在第1行查找，优先选择列数小的列）
             match_col_idx = None
             return_col_idx = None
 
             for col_idx in range(sheet.ncols):
                 header_value = sheet.cell_value(0, col_idx)
-                if header_value == match_column:
+                if header_value == match_column and match_col_idx is None:
                     match_col_idx = col_idx
-                elif header_value == return_column:
+                elif header_value == return_column and return_col_idx is None:
                     return_col_idx = col_idx
 
             if match_col_idx is None:
