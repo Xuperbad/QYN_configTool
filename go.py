@@ -547,6 +547,145 @@ class ExcelTextReplacer:
             # 结果不唯一或未找到
             return None
 
+    def lookup_field_values(self, excel_file_path, sheet_name, match_column, return_column, search_values):
+        """在指定Excel文件的工作表中查找字段值
+
+        Args:
+            excel_file_path: Excel文件的绝对路径
+            sheet_name: 工作表名称
+            match_column: 用于匹配的列名
+            return_column: 要返回值的列名
+            search_values: 要搜索的值列表
+
+        Returns:
+            dict: {search_value: found_value} 的映射字典
+        """
+        results = {}
+
+        try:
+            file_extension = Path(excel_file_path).suffix.lower()
+
+            if file_extension == '.xlsx':
+                results = self._lookup_in_xlsx(excel_file_path, sheet_name, match_column, return_column, search_values)
+            elif file_extension == '.xls':
+                results = self._lookup_in_xls(excel_file_path, sheet_name, match_column, return_column, search_values)
+
+        except Exception as e:
+            print(f"查找字段值时出错: {str(e)}")
+
+        return results
+
+    def _lookup_in_xlsx(self, excel_file_path, sheet_name, match_column, return_column, search_values):
+        """在.xlsx文件中查找字段值"""
+        results = {}
+
+        try:
+            workbook = openpyxl.load_workbook(excel_file_path, read_only=True)
+
+            if sheet_name not in workbook.sheetnames:
+                print(f"工作表 '{sheet_name}' 不存在于文件 {Path(excel_file_path).name}")
+                workbook.close()
+                return results
+
+            sheet = workbook[sheet_name]
+
+            # 获取表头行，找到列索引
+            header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+
+            match_col_idx = None
+            return_col_idx = None
+
+            for idx, header in enumerate(header_row):
+                if header == match_column:
+                    match_col_idx = idx
+                elif header == return_column:
+                    return_col_idx = idx
+
+            if match_col_idx is None:
+                print(f"未找到匹配列 '{match_column}' 在工作表 '{sheet_name}'")
+                workbook.close()
+                return results
+
+            if return_col_idx is None:
+                print(f"未找到返回列 '{return_column}' 在工作表 '{sheet_name}'")
+                workbook.close()
+                return results
+
+            # 遍历数据行查找匹配值
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if len(row) > max(match_col_idx, return_col_idx):
+                    match_value = row[match_col_idx]
+                    return_value = row[return_col_idx]
+
+                    if match_value is not None and return_value is not None:
+                        match_str = str(match_value).strip()
+                        if match_str in search_values:
+                            results[match_str] = str(return_value)
+
+            workbook.close()
+
+        except Exception as e:
+            print(f"读取.xlsx文件时出错: {str(e)}")
+
+        return results
+
+    def _lookup_in_xls(self, excel_file_path, sheet_name, match_column, return_column, search_values):
+        """在.xls文件中查找字段值"""
+        results = {}
+
+        try:
+            workbook = xlrd.open_workbook(excel_file_path)
+
+            sheet_names = workbook.sheet_names()
+            if sheet_name not in sheet_names:
+                print(f"工作表 '{sheet_name}' 不存在于文件 {Path(excel_file_path).name}")
+                return results
+
+            sheet = workbook.sheet_by_name(sheet_name)
+
+            if sheet.nrows == 0:
+                return results
+
+            # 获取表头行，找到列索引
+            match_col_idx = None
+            return_col_idx = None
+
+            for col_idx in range(sheet.ncols):
+                header_value = sheet.cell_value(0, col_idx)
+                if header_value == match_column:
+                    match_col_idx = col_idx
+                elif header_value == return_column:
+                    return_col_idx = col_idx
+
+            if match_col_idx is None:
+                print(f"未找到匹配列 '{match_column}' 在工作表 '{sheet_name}'")
+                return results
+
+            if return_col_idx is None:
+                print(f"未找到返回列 '{return_column}' 在工作表 '{sheet_name}'")
+                return results
+
+            # 遍历数据行查找匹配值
+            for row_idx in range(1, sheet.nrows):
+                if match_col_idx < sheet.ncols and return_col_idx < sheet.ncols:
+                    match_value = sheet.cell_value(row_idx, match_col_idx)
+                    return_value = sheet.cell_value(row_idx, return_col_idx)
+
+                    if match_value and return_value:
+                        # 处理数值类型，转换为整数字符串（如果是整数）
+                        if isinstance(match_value, float) and match_value.is_integer():
+                            match_str = str(int(match_value))
+                        else:
+                            match_str = str(match_value).strip()
+
+                        if match_str in search_values:
+                            results[match_str] = str(return_value)
+
+        except Exception as e:
+            print(f"读取.xls文件时出错: {str(e)}")
+
+        return results
+
     def _search_chinese_in_xlsx(self, search_id, file_path):
         """在.xlsx文件中搜索ID对应的中文文本"""
         results = []

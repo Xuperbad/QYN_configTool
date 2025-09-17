@@ -26,6 +26,21 @@ OUTPUT_FOLDER = "xls"
 
 # 支持的文件扩展名
 SUPPORTED_EXTENSIONS = ['.xlsx', '.xls']
+
+# ==================== 预预处理配置区域 ====================
+# 自定义字段关联配置
+# 格式: "源表[源工作表], 源列名": "目标表[目标工作表], 匹配列名, 返回列名"
+# 示例: "hero[hero], 技能-初始资质": "heroSkill[heroskill], 技能id, 名称"
+PRE_PROCESSING_CONFIG = {
+    "hero[hero], 技能-初始资质": "heroSkill[heroskill], 技能id, 名称",
+    "hero[hero], 技能-商铺": "heroSkill[heroskill], 技能id, 名称",
+    "hero[hero], 潜能技能": "heroSkill[heroskill], 技能id, 名称",
+    "hero[hero], 光环": "heroSkill[heroskill], 技能id, 名称",
+    "wife[wif], 门客缘分": "hero[hero], 人才ID, 名字",
+    "wife[wif], 技能": "wife[老婆技能], 序号, 技能名",
+    # 可以添加更多关联配置
+    # "表名[工作表], 列名": "目标表[目标工作表], 匹配列, 返回列",
+}
 # ================================================
 
 class ExcelToCSVConverter:
@@ -117,19 +132,34 @@ class ExcelToCSVConverter:
             raise Exception(f"读取.xls文件失败: {str(e)}")
     
     def find_t_strings(self, text):
-        """查找文本中所有的t_*字符串，先按逗号分割再匹配"""
+        """查找文本中所有的t_*字符串，包括{}内的t_*字符串"""
         if pd.isna(text) or not isinstance(text, str):
             return []
 
         t_strings = []
 
-        # 先按逗号分割文本
+        # 方法1: 查找普通的t_*字符串（按逗号分割）
         parts = [part.strip() for part in text.split(',')]
-
         for part in parts:
             # 检查每个部分是否是完整的t_*字符串
             if re.match(r'^t_[a-zA-Z0-9_]+$', part):
                 t_strings.append(part)
+
+        # 方法2: 查找{}内的t_*字符串，如 1001{t_heroSkillnew_name1001}
+        brace_pattern = r'\{(t_[a-zA-Z0-9_]+)\}'
+        t_strings_in_braces = re.findall(brace_pattern, text)
+        t_strings.extend(t_strings_in_braces)
+
+        # 方法3: 查找所有独立的t_*字符串（不在{}内的）
+        # 这个用于处理可能遗漏的情况
+        all_t_pattern = r't_[a-zA-Z0-9_]+'
+        all_t_strings = re.findall(all_t_pattern, text)
+
+        # 过滤掉已经在{}内的t_*字符串，避免重复处理
+        for t_str in all_t_strings:
+            # 检查这个t_*字符串是否在{}内
+            if f'{{{t_str}}}' not in text:
+                t_strings.append(t_str)
 
         return list(set(t_strings))  # 去重
 
@@ -198,6 +228,165 @@ class ExcelToCSVConverter:
 
         return results
 
+    def parse_ids_from_value(self, value):
+        """从值中解析出ID列表，支持多种格式"""
+        if pd.isna(value) or not isinstance(value, str):
+            return []
+
+        # 移除空白字符
+        value = value.strip()
+        if not value:
+            return []
+
+        ids = []
+
+        # 处理数组格式 [1001, 1002] 或 [1001,1002]
+        if value.startswith('[') and value.endswith(']'):
+            # 移除方括号
+            inner_value = value[1:-1].strip()
+            if inner_value:
+                # 按逗号分割
+                parts = [part.strip() for part in inner_value.split(',')]
+                ids.extend([part for part in parts if part])
+        else:
+            # 处理逗号分隔格式 1001, 1002 或单个值 1001
+            parts = [part.strip() for part in value.split(',')]
+            ids.extend([part for part in parts if part])
+
+        return ids
+
+    def pre_preprocess_dataframe(self, df, current_table_sheet):
+        """预预处理DataFrame，根据配置进行字段关联查找"""
+        if not PRE_PROCESSING_CONFIG:
+            print("未配置预预处理规则，跳过预预处理")
+            return df
+
+        print("正在进行预预处理，处理自定义字段关联...")
+
+        # 导入go.py模块
+        try:
+            import sys
+            sys.path.append(str(Path.cwd()))
+            from go import ExcelTextReplacer
+        except Exception as e:
+            print(f"导入go.py模块失败: {str(e)}")
+            return df
+
+        # 创建查找器实例
+        replacer = ExcelTextReplacer({})
+        df_processed = df.copy()
+
+        # 处理每个配置规则
+        for source_config, target_config in PRE_PROCESSING_CONFIG.items():
+            try:
+                # 解析源配置: "hero[hero], 技能-初始资质"
+                source_parts = [part.strip() for part in source_config.split(',')]
+                if len(source_parts) != 2:
+                    print(f"源配置格式错误: {source_config}")
+                    continue
+
+                source_table_sheet = source_parts[0]  # "hero[hero]"
+                source_column = source_parts[1]       # "技能-初始资质"
+
+                # 检查是否匹配当前处理的表和工作表
+                if source_table_sheet != current_table_sheet:
+                    continue
+
+                # 解析目标配置: "heroSkill[heroskill], 技能id, 名称"
+                target_parts = [part.strip() for part in target_config.split(',')]
+                if len(target_parts) != 3:
+                    print(f"目标配置格式错误: {target_config}")
+                    continue
+
+                target_table_sheet = target_parts[0]  # "heroSkill[heroskill]"
+                match_column = target_parts[1]        # "技能id"
+                return_column = target_parts[2]       # "名称"
+
+                # 解析目标表信息
+                if '[' not in target_table_sheet or ']' not in target_table_sheet:
+                    print(f"目标表格式错误: {target_table_sheet}")
+                    continue
+
+                target_file_part, target_sheet_part = target_table_sheet.split('[', 1)
+                target_sheet_name = target_sheet_part.rstrip(']')
+                target_filename = f"{target_file_part.strip()}.xls"
+
+                # 构建目标文件的绝对路径
+                target_file_path = Path(TARGET_FOLDER) / target_filename
+
+                if not target_file_path.exists():
+                    # 尝试其他扩展名
+                    for ext in SUPPORTED_EXTENSIONS:
+                        test_path = Path(TARGET_FOLDER) / f"{target_file_part.strip()}{ext}"
+                        if test_path.exists():
+                            target_file_path = test_path
+                            break
+                    else:
+                        print(f"未找到目标文件: {target_filename}")
+                        continue
+
+                print(f"处理字段关联: {source_column} -> {target_file_path.name}[{target_sheet_name}]")
+
+                # 检查源列是否存在
+                if source_column not in df_processed.columns:
+                    print(f"源列 '{source_column}' 不存在")
+                    continue
+
+                # 收集所有需要查找的ID
+                all_ids = set()
+                for idx, cell_value in df_processed[source_column].items():
+                    ids = self.parse_ids_from_value(cell_value)
+                    all_ids.update(ids)
+
+                if not all_ids:
+                    print(f"在列 '{source_column}' 中未找到任何ID")
+                    continue
+
+                print(f"找到 {len(all_ids)} 个唯一ID，正在查找对应值...")
+
+                # 使用go.py的方法查找对应值
+                lookup_results = replacer.lookup_field_values(
+                    str(target_file_path),
+                    target_sheet_name,
+                    match_column,
+                    return_column,
+                    list(all_ids)
+                )
+
+                found_count = len(lookup_results)
+                print(f"成功找到 {found_count}/{len(all_ids)} 个ID的对应值")
+
+                # 替换DataFrame中的内容
+                for idx, cell_value in df_processed[source_column].items():
+                    if pd.notna(cell_value) and isinstance(cell_value, str):
+                        ids = self.parse_ids_from_value(cell_value)
+                        if ids:
+                            # 构建新值，格式: id{对应值}
+                            new_parts = []
+                            for id_val in ids:
+                                if id_val in lookup_results:
+                                    new_parts.append(f"{id_val}{{{lookup_results[id_val]}}}")
+                                else:
+                                    new_parts.append(id_val)  # 保持原值
+
+                            # 根据原格式重新组装
+                            original_value = str(cell_value).strip()
+                            if original_value.startswith('[') and original_value.endswith(']'):
+                                # 保持数组格式
+                                df_processed.loc[idx, source_column] = f"[{', '.join(new_parts)}]"
+                            else:
+                                # 保持逗号分隔格式
+                                df_processed.loc[idx, source_column] = ', '.join(new_parts)
+
+                print(f"完成字段 '{source_column}' 的关联处理")
+
+            except Exception as e:
+                print(f"处理配置 '{source_config}' 时出错: {str(e)}")
+                continue
+
+        print("预预处理完成")
+        return df_processed
+
     def preprocess_dataframe(self, df):
         """预处理DataFrame，将t_*字符串替换为t_*{中文}格式"""
         print("正在进行预处理，识别并查找t_*字符串...")
@@ -240,7 +429,7 @@ class ExcelToCSVConverter:
                 if pd.notna(cell_value) and isinstance(cell_value, str):
                     new_value = cell_value
 
-                    # 按逗号分割，对每个部分单独处理
+                    # 方法1: 直接替换完整的t_*字符串（按逗号分割）
                     parts = [part.strip() for part in new_value.split(',')]
                     new_parts = []
 
@@ -251,7 +440,21 @@ class ExcelToCSVConverter:
                         else:
                             new_parts.append(part)
 
-                    df_processed.loc[idx, col] = ', '.join(new_parts)
+                    new_value = ', '.join(new_parts)
+
+                    # 方法2: 替换{}内的t_*字符串
+                    import re
+                    def replace_t_in_braces(match):
+                        t_string = match.group(1)  # 获取{}内的t_*字符串
+                        if t_string in t_string_map:
+                            return '{' + t_string_map[t_string] + '}'
+                        else:
+                            return match.group(0)  # 保持原样
+
+                    # 使用正则表达式替换{}内的t_*字符串
+                    new_value = re.sub(r'\{(t_[a-zA-Z0-9_]+)\}', replace_t_in_braces, new_value)
+
+                    df_processed.loc[idx, col] = new_value
 
         print(f"预处理完成，共找到 {found_count}/{len(all_t_strings)} 个t_*字符串的中文对应")
         print(f"替换了 {found_count} 个t_*字符串为带中文的格式")
@@ -262,8 +465,9 @@ class ExcelToCSVConverter:
         output_path = self.output_folder / output_filename
 
         try:
-            # 保存为CSV，使用UTF-8编码
-            dataframe.to_csv(output_path, index=False, encoding='utf-8-sig')
+            # 保存为CSV，使用UTF-8编码，禁用引号转义
+            dataframe.to_csv(output_path, index=False, encoding='utf-8-sig',
+                           quoting=1, escapechar=None)  # quoting=1 表示 QUOTE_ALL
             return output_path
         except Exception as e:
             raise Exception(f"保存CSV文件失败: {str(e)}")
@@ -288,8 +492,15 @@ class ExcelToCSVConverter:
 
             print(f"成功读取数据: {len(df)} 行, {len(df.columns)} 列")
 
+            # 构建当前表和工作表的标识
+            base_filename = Path(filename).stem  # 去掉扩展名
+            current_table_sheet = f"{base_filename}[{sheet_name}]"
+
+            # 预预处理DataFrame，处理自定义字段关联
+            df_pre_processed = self.pre_preprocess_dataframe(df, current_table_sheet)
+
             # 预处理DataFrame，查找并替换t_*字符串
-            df_processed = self.preprocess_dataframe(df)
+            df_processed = self.preprocess_dataframe(df_pre_processed)
 
             # 生成输出文件名（去掉.xls扩展名）
             base_filename = Path(filename).stem  # 去掉扩展名
@@ -316,14 +527,18 @@ class ExcelToCSVConverter:
         return True
 
     def process_csv_content(self, csv_content):
-        """处理CSV内容，将t_*{中文}格式还原为t_*格式"""
+        """处理CSV内容，将各种{中文}格式还原为原始格式"""
         import re
 
         # 正则表达式匹配 t_*{中文} 格式
-        pattern = r't_([a-zA-Z0-9_]+)\{[^}]*\}'
-
+        t_pattern = r't_([a-zA-Z0-9_]+)\{[^}]*\}'
         # 替换为 t_* 格式
-        processed_content = re.sub(pattern, r't_\1', csv_content)
+        processed_content = re.sub(t_pattern, r't_\1', csv_content)
+
+        # 正则表达式匹配 数字{中文} 格式（用于ID关联）
+        id_pattern = r'(\d+)\{[^}]*\}'
+        # 替换为纯数字格式
+        processed_content = re.sub(id_pattern, r'\1', processed_content)
 
         return processed_content
 
