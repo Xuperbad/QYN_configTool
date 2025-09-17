@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import multiprocessing
 
 # ==================== 配置区域 ====================
 # 目标文件夹路径
@@ -154,8 +155,14 @@ class ExcelToCSVConverter:
             # 如果出现任何错误，返回None
             return None
 
-    def search_chinese_text_batch(self, t_strings, max_workers=8):
+    def search_chinese_text_batch(self, t_strings, max_workers=None):
         """并发批量搜索t_string对应的中文文本"""
+        if max_workers is None:
+            # 根据CPU核心数和任务数量动态调整线程数
+            cpu_count = multiprocessing.cpu_count()
+            # 使用CPU核心数的2-3倍，但不超过任务数量，最少4个线程
+            max_workers = min(max(cpu_count * 3, 4), len(t_strings), 32)
+
         print(f"使用 {max_workers} 个线程并发搜索...")
 
         results = {}
