@@ -112,7 +112,10 @@ class ExcelTextReplacer:
         # 将所有值转换为字符串进行搜索
         cell_value_str = str(cell_value)
 
-        if search_text in cell_value_str:
+        # 检查是否匹配（支持模糊搜索）
+        is_match = self.is_text_match(cell_value_str, search_text)
+
+        if is_match:
             # 获取第1列作为ID（如果存在）
             id_value = ""
             if col_idx == 0:  # 如果当前就是第1列
@@ -129,6 +132,16 @@ class ExcelTextReplacer:
             })
             return True
         return False
+
+    def is_text_match(self, text, search_text):
+        """检查文本是否匹配搜索条件（支持模糊搜索）"""
+        if search_text.endswith('*'):
+            # 模糊搜索：前缀匹配
+            prefix = search_text[:-1]  # 去掉末尾的 *
+            return text.startswith(prefix)
+        else:
+            # 精确搜索：包含匹配
+            return search_text in text
 
     def copy_cell_style(self, source_cell, target_cell):
         """复制单元格样式"""
@@ -338,7 +351,8 @@ class ExcelTextReplacer:
             print(f"在路径 '{directory}' 中未找到Excel文件")
             return
 
-        print(f"在 {len(excel_files)} 个Excel文件中搜索: '{search_text}'")
+        search_type = "模糊搜索" if search_text.endswith('*') else "精确搜索"
+        print(f"在 {len(excel_files)} 个Excel文件中{search_type}: '{search_text}'")
         print("="*60)
 
         for file_path in excel_files:
@@ -404,7 +418,7 @@ class ExcelTextReplacer:
                     for col_idx in [0, 2]:
                         if col_idx < len(row) and row[col_idx].value is not None:
                             cell_value = str(row[col_idx].value)
-                            if search_text in cell_value:
+                            if self.is_text_match(cell_value, search_text):
                                 found_match = True
                                 break
 
@@ -412,9 +426,9 @@ class ExcelTextReplacer:
                     if found_match:
                         # 确定哪一列包含搜索文本
                         matched_col = 0
-                        if id_value and search_text in id_value:
+                        if id_value and self.is_text_match(id_value, search_text):
                             matched_col = 1
-                        elif chinese_value and search_text in chinese_value:
+                        elif chinese_value and self.is_text_match(chinese_value, search_text):
                             matched_col = 3
 
                         # 添加搜索结果，包含完整的行信息
@@ -465,7 +479,7 @@ class ExcelTextReplacer:
                             cell_value = sheet.cell_value(row_idx, col_idx)
                             if cell_value:
                                 cell_value_str = str(cell_value)
-                                if search_text in cell_value_str:
+                                if self.is_text_match(cell_value_str, search_text):
                                     found_match = True
                                     break
 
@@ -473,9 +487,9 @@ class ExcelTextReplacer:
                     if found_match:
                         # 确定哪一列包含搜索文本
                         matched_col = 0
-                        if id_value and search_text in id_value:
+                        if id_value and self.is_text_match(id_value, search_text):
                             matched_col = 1
-                        elif chinese_value and search_text in chinese_value:
+                        elif chinese_value and self.is_text_match(chinese_value, search_text):
                             matched_col = 3
 
                         # 添加搜索结果，包含完整的行信息
@@ -583,6 +597,9 @@ def main():
                 work_path = sys.argv[2] if len(sys.argv) >= 3 else '.'
                 print("Excel文本搜索工具")
                 print("="*40)
+                print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
+                print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
+                print("="*40)
                 print(f"搜索路径: {work_path}")
                 replacer.search_in_excel_files(search_text, work_path)
                 return
@@ -602,6 +619,9 @@ def main():
             # 搜索模式
             search_text = first_arg.strip('"')
             print("Excel文本搜索工具")
+            print("="*40)
+            print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
+            print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
             print("="*40)
             print(f"搜索路径: {work_path}")
             replacer.search_in_excel_files(search_text, work_path)
