@@ -618,9 +618,11 @@ class ExcelTextReplacer:
                     return_value = row[return_col_idx]
 
                     if match_value is not None and return_value is not None:
-                        match_str = str(match_value).strip()
+                        # 统一转换为文本字符串，避免数值类型问题
+                        match_str = self._convert_to_text_string(match_value)
+                        return_str = self._convert_to_text_string(return_value)
                         if match_str in search_values:
-                            results[match_str] = str(return_value)
+                            results[match_str] = return_str
 
             workbook.close()
 
@@ -672,19 +674,37 @@ class ExcelTextReplacer:
                     return_value = sheet.cell_value(row_idx, return_col_idx)
 
                     if match_value and return_value:
-                        # 处理数值类型，转换为整数字符串（如果是整数）
-                        if isinstance(match_value, float) and match_value.is_integer():
-                            match_str = str(int(match_value))
-                        else:
-                            match_str = str(match_value).strip()
+                        # 统一转换为文本字符串，避免数值类型问题
+                        match_str = self._convert_to_text_string(match_value)
+                        return_str = self._convert_to_text_string(return_value)
 
                         if match_str in search_values:
-                            results[match_str] = str(return_value)
+                            results[match_str] = return_str
 
         except Exception as e:
             print(f"读取.xls文件时出错: {str(e)}")
 
         return results
+
+    def _convert_to_text_string(self, value):
+        """统一将Excel值转换为文本字符串，避免数值类型问题"""
+        if value is None:
+            return ""
+
+        if isinstance(value, (int, float)):
+            # 对于数值类型，检查是否为整数值
+            if isinstance(value, float) and value.is_integer():
+                # 浮点数但是整数值，转换为整数字符串
+                return str(int(value))
+            elif isinstance(value, int):
+                # 整数直接转换
+                return str(value)
+            else:
+                # 浮点数保持小数
+                return str(value)
+        else:
+            # 其他类型（字符串等）直接转换并去除首尾空格
+            return str(value).strip()
 
     def _search_chinese_in_xlsx(self, search_id, file_path):
         """在.xlsx文件中搜索ID对应的中文文本"""
