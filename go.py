@@ -140,8 +140,8 @@ class ExcelTextReplacer:
             prefix = search_text[:-1]  # 去掉末尾的 *
             return text.startswith(prefix)
         else:
-            # 精确搜索：包含匹配
-            return search_text in text
+            # 精确搜索：完全匹配（而不是包含匹配）
+            return text == search_text
 
     def copy_cell_style(self, source_cell, target_cell):
         """复制单元格样式"""

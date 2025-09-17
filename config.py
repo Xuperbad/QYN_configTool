@@ -12,6 +12,11 @@ from pathlib import Path
 import pandas as pd
 import openpyxl
 import xlrd
+import re
+import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ==================== 配置区域 ====================
 # 目标文件夹路径
@@ -112,10 +117,167 @@ class ExcelToCSVConverter:
         except Exception as e:
             raise Exception(f"读取.xls文件失败: {str(e)}")
     
+    def find_t_strings(self, text):
+        """查找文本中所有的t_*字符串，先按逗号分割再匹配"""
+        if pd.isna(text) or not isinstance(text, str):
+            return []
+
+        t_strings = []
+
+        # 先按逗号分割文本
+        parts = [part.strip() for part in text.split(',')]
+
+        for part in parts:
+            # 检查每个部分是否是完整的t_*字符串
+            if re.match(r'^t_[a-zA-Z0-9_]+$', part):
+                t_strings.append(part)
+
+        return list(set(t_strings))  # 去重
+
+    def search_chinese_text(self, t_string):
+        """调用go.py搜索t_string对应的中文文本"""
+        try:
+            # 使用bytes模式避免编码问题
+            result = subprocess.run(
+                ['python', 'go.py', f'"{t_string}"'],
+                capture_output=True,
+                cwd=Path.cwd(),
+                timeout=15  # 减少超时时间
+            )
+
+            if result.returncode == 0 and result.stdout:
+                # 尝试多种编码解码输出
+                output = None
+                encodings = ['utf-8', 'gbk', 'gb2312', 'cp936', 'latin1']
+
+                for encoding in encodings:
+                    try:
+                        output = result.stdout.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+
+                if output:
+                    # 解析输出，查找中文内容
+                    lines = output.split('\n')
+                    for line in lines:
+                        if t_string in line and '行:' in line:
+                            # 格式：文件名[工作表] 第X行: ID, 中文内容
+                            parts = line.split(': ', 1)
+                            if len(parts) > 1:
+                                content_part = parts[1]
+                                if ', ' in content_part:
+                                    chinese_text = content_part.split(', ', 1)[1].strip()
+                                    return chinese_text
+                            break
+
+            return None
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception:
+            return None
+
+    def search_chinese_text_batch(self, t_strings, max_workers=8):
+        """并发批量搜索t_string对应的中文文本"""
+        print(f"使用 {max_workers} 个线程并发搜索...")
+
+        results = {}
+        completed_count = 0
+        total_count = len(t_strings)
+        lock = threading.Lock()
+
+        def search_single(t_string):
+            nonlocal completed_count
+            chinese_text = self.search_chinese_text(t_string)
+
+            with lock:
+                completed_count += 1
+                if chinese_text:
+                    print(f"  [{completed_count}/{total_count}] {t_string} -> {chinese_text}")
+                else:
+                    print(f"  [{completed_count}/{total_count}] {t_string} -> 未找到")
+
+            return t_string, chinese_text
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_string = {executor.submit(search_single, t_string): t_string
+                              for t_string in t_strings}
+
+            # 收集结果
+            for future in as_completed(future_to_string):
+                try:
+                    t_string, chinese_text = future.result()
+                    results[t_string] = chinese_text
+                except Exception as e:
+                    t_string = future_to_string[future]
+                    print(f"搜索 {t_string} 时出错: {str(e)}")
+                    results[t_string] = None
+
+        return results
+
+    def preprocess_dataframe(self, df):
+        """预处理DataFrame，将t_*字符串替换为t_*{中文}格式"""
+        print("正在进行预处理，识别并查找t_*字符串...")
+
+        # 收集所有需要查找的t_*字符串
+        all_t_strings = set()
+
+        for col in df.columns:
+            for idx, cell_value in df[col].items():
+                if pd.notna(cell_value) and isinstance(cell_value, str):
+                    t_strings = self.find_t_strings(cell_value)
+                    all_t_strings.update(t_strings)
+
+        if not all_t_strings:
+            print("未找到任何t_*字符串，跳过预处理")
+            return df
+
+        print(f"找到 {len(all_t_strings)} 个唯一的t_*字符串，正在并发查找对应中文...")
+
+        # 并发批量查找中文文本
+        chinese_results = self.search_chinese_text_batch(list(all_t_strings))
+
+        # 构建替换映射
+        t_string_map = {}
+        found_count = 0
+        for t_string, chinese_text in chinese_results.items():
+            if chinese_text:
+                t_string_map[t_string] = f"{t_string}{{{chinese_text}}}"
+                found_count += 1
+            else:
+                t_string_map[t_string] = t_string  # 保持原样
+
+        # 替换DataFrame中的内容
+        print("正在替换DataFrame中的内容...")
+        df_processed = df.copy()
+
+        for col in df_processed.columns:
+            for idx, cell_value in df_processed[col].items():
+                if pd.notna(cell_value) and isinstance(cell_value, str):
+                    new_value = cell_value
+
+                    # 按逗号分割，对每个部分单独处理
+                    parts = [part.strip() for part in new_value.split(',')]
+                    new_parts = []
+
+                    for part in parts:
+                        # 检查这个部分是否是完整的t_*字符串
+                        if part in t_string_map:
+                            new_parts.append(t_string_map[part])
+                        else:
+                            new_parts.append(part)
+
+                    df_processed.loc[idx, col] = ', '.join(new_parts)
+
+        print(f"预处理完成，共找到 {found_count}/{len(all_t_strings)} 个t_*字符串的中文对应")
+        print(f"替换了 {found_count} 个t_*字符串为带中文的格式")
+        return df_processed
+
     def save_to_csv(self, dataframe, output_filename):
         """将DataFrame保存为CSV文件"""
         output_path = self.output_folder / output_filename
-        
+
         try:
             # 保存为CSV，使用UTF-8编码
             dataframe.to_csv(output_path, index=False, encoding='utf-8-sig')
@@ -140,26 +302,29 @@ class ExcelToCSVConverter:
             # 读取指定工作表
             print(f"正在读取工作表 '{sheet_name}'...")
             df = self.read_excel_sheet(file_path, sheet_name)
-            
+
             print(f"成功读取数据: {len(df)} 行, {len(df.columns)} 列")
-            
+
+            # 预处理DataFrame，查找并替换t_*字符串
+            df_processed = self.preprocess_dataframe(df)
+
             # 生成输出文件名（去掉.xls扩展名）
             base_filename = Path(filename).stem  # 去掉扩展名
             output_filename = f"{base_filename}[{sheet_name}].csv"
             
             # 保存为CSV
             print(f"正在保存为CSV文件: {output_filename}")
-            output_path = self.save_to_csv(df, output_filename)
-            
+            output_path = self.save_to_csv(df_processed, output_filename)
+
             print(f"✅ 转换完成!")
             print(f"输出文件: {output_path}")
-            print(f"数据行数: {len(df)}")
-            print(f"数据列数: {len(df.columns)}")
-            
+            print(f"数据行数: {len(df_processed)}")
+            print(f"数据列数: {len(df_processed.columns)}")
+
             # 显示前几行数据预览
-            if len(df) > 0:
+            if len(df_processed) > 0:
                 print("\n数据预览:")
-                print(df.head().to_string())
+                print(df_processed.head().to_string())
             
         except Exception as e:
             print(f"❌ 转换失败: {str(e)}")
