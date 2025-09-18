@@ -130,5 +130,6 @@ dmypy.json
 
 # Project specific
 xls/
+xls_base/
 test_*.py
 备份com.json/

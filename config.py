@@ -17,12 +17,19 @@ import multiprocessing
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+import shutil
+from wcwidth import wcswidth
+import difflib
+
 # ==================== 配置区域 ====================
 # 目标文件夹路径
 TARGET_FOLDER = r"E:\qyn_game\parseFiles\global\config\test"
 
 # 输出文件夹名称（在目标文件夹下创建）
 OUTPUT_FOLDER = "xls"
+
+# 基线备份文件夹名称（在当前工作目录下创建）
+BASE_FOLDER = "xls_base"
 
 # 支持的文件扩展名
 SUPPORTED_EXTENSIONS = ['.xlsx', '.xls']
@@ -51,7 +58,12 @@ class ExcelToCSVConverter:
 
         # 确保输出文件夹存在
         self.output_folder.mkdir(exist_ok=True)
-        
+
+        # 基线备份文件夹
+        self.base_folder = Path.cwd() / BASE_FOLDER
+        self.base_folder.mkdir(exist_ok=True)
+
+
     def parse_command(self, command):
         """解析命令行参数，提取文件名和工作表名"""
         if '[' not in command or ']' not in command:
@@ -68,27 +80,27 @@ class ExcelToCSVConverter:
         filename = f"{file_part.strip()}.xls"
 
         return filename, sheet_name.strip()
-    
+
     def find_excel_file(self, filename):
         """在目标文件夹中查找Excel文件"""
         file_path = self.target_folder / filename
-        
+
         if file_path.exists():
             return file_path
-        
+
         # 如果没有找到，尝试不同的扩展名
         name_without_ext = file_path.stem
         for ext in SUPPORTED_EXTENSIONS:
             test_path = self.target_folder / f"{name_without_ext}{ext}"
             if test_path.exists():
                 return test_path
-        
+
         return None
-    
+
     def read_excel_sheet(self, file_path, sheet_name):
         """读取Excel文件的指定工作表"""
         file_extension = file_path.suffix.lower()
-        
+
         try:
             if file_extension == '.xlsx':
                 return self.read_xlsx_sheet(file_path, sheet_name)
@@ -98,7 +110,7 @@ class ExcelToCSVConverter:
                 raise ValueError(f"不支持的文件格式: {file_extension}")
         except Exception as e:
             raise Exception(f"读取Excel文件失败: {str(e)}")
-    
+
     def read_xlsx_sheet(self, file_path, sheet_name):
         """读取.xlsx文件的指定工作表"""
         try:
@@ -108,13 +120,13 @@ class ExcelToCSVConverter:
                 available_sheets = ', '.join(workbook.sheetnames)
                 raise ValueError(f"工作表 '{sheet_name}' 不存在。可用工作表: {available_sheets}")
             workbook.close()
-            
+
             # 使用pandas读取指定工作表
             df = pd.read_excel(file_path, sheet_name=sheet_name, engine='openpyxl')
             return df
         except Exception as e:
             raise Exception(f"读取.xlsx文件失败: {str(e)}")
-    
+
     def read_xls_sheet(self, file_path, sheet_name):
         """读取.xls文件的指定工作表"""
         try:
@@ -124,13 +136,13 @@ class ExcelToCSVConverter:
             if sheet_name not in sheet_names:
                 available_sheets = ', '.join(sheet_names)
                 raise ValueError(f"工作表 '{sheet_name}' 不存在。可用工作表: {available_sheets}")
-            
+
             # 使用pandas读取指定工作表
             df = pd.read_excel(file_path, sheet_name=sheet_name, engine='xlrd')
             return df
         except Exception as e:
             raise Exception(f"读取.xls文件失败: {str(e)}")
-    
+
     def find_t_strings(self, text):
         """查找文本中所有的t_*字符串，包括{}内的t_*字符串"""
         if pd.isna(text) or not isinstance(text, str):
@@ -514,7 +526,259 @@ class ExcelToCSVConverter:
             return output_path
         except Exception as e:
             raise Exception(f"保存CSV文件失败: {str(e)}")
-    
+
+
+    def get_display_width(self, text):
+        """获取文本的显示宽度（考虑中文字符）"""
+        if not text:
+            return 0
+        width = wcswidth(str(text))
+        return width if width is not None else len(str(text))
+
+    def truncate_text(self, text, max_width):
+        """截断文本到指定显示宽度"""
+        if not text:
+            return ""
+        text = str(text)
+        if self.get_display_width(text) <= max_width:
+            return text
+
+        # 逐字符截断直到符合宽度
+        result = ""
+        for char in text:
+            if self.get_display_width(result + char + "...") > max_width:
+                return result + "..."
+            result += char
+        return result
+
+    def parse_array_value(self, value):
+        """解析数组值，支持 'aa, bb' 和 '[aa, bb]' 两种格式"""
+        if not value or not isinstance(value, str):
+            return None
+
+        value = value.strip()
+        if not value:
+            return None
+
+        # 检查是否包含逗号（数组标识）
+        if ',' not in value:
+            return None
+
+        # 处理 [aa, bb] 格式
+        if value.startswith('[') and value.endswith(']'):
+            inner = value[1:-1].strip()
+            if inner:
+                items = [item.strip() for item in inner.split(',')]
+                return [item for item in items if item]  # 过滤空项
+
+        # 处理 aa, bb 格式
+        else:
+            items = [item.strip() for item in value.split(',')]
+            return [item for item in items if item]  # 过滤空项
+
+        return None
+
+    def compare_values_with_diff(self, old_val, new_val):
+        """使用difflib智能比较两个值，返回变更描述"""
+        # 先尝试数组比较
+        old_items = self.parse_array_value(old_val)
+        new_items = self.parse_array_value(new_val)
+
+        # 如果都是数组，进行数组比较
+        if old_items is not None and new_items is not None:
+            return self._compare_array_items(old_items, new_items)
+
+        # 如果只有一个是数组，或都不是数组，进行字符串级别比较
+        return self._compare_string_values(str(old_val), str(new_val))
+
+    def _compare_array_items(self, old_items, new_items):
+        """比较数组项目"""
+        differ = difflib.SequenceMatcher(None, old_items, new_items)
+        opcodes = differ.get_opcodes()
+
+        changes = []
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == 'delete':
+                deleted_items = old_items[i1:i2]
+                for idx, item in enumerate(deleted_items):
+                    changes.append(('删除', i1 + idx, item, None))
+
+            elif tag == 'insert':
+                inserted_items = new_items[j1:j2]
+                for idx, item in enumerate(inserted_items):
+                    changes.append(('新增', j1 + idx, None, item))
+
+            elif tag == 'replace':
+                old_part = old_items[i1:i2]
+                new_part = new_items[j1:j2]
+                # 对于替换，我们将其分解为删除+新增
+                for idx, item in enumerate(old_part):
+                    changes.append(('删除', i1 + idx, item, None))
+                for idx, item in enumerate(new_part):
+                    changes.append(('新增', j1 + idx, None, item))
+
+        return changes if changes else None
+
+    def _compare_string_values(self, old_val, new_val):
+        """比较字符串值，对于非数组值直接显示完整的删除和新增"""
+        if old_val == new_val:
+            return None
+
+        # 对于字符串值，直接显示完整的删除和新增
+        changes = []
+        changes.append(('删除', 0, old_val, None))
+        changes.append(('新增', 0, None, new_val))
+
+        return changes
+
+    def show_diff_with_baseline(self, csv_file_path):
+        """与基线备份进行比对并打印变更摘要"""
+        try:
+            csv_path = Path(csv_file_path)
+            base_path = self.base_folder / csv_path.name
+            if not base_path.exists():
+                print(f"  无基线备份，跳过比对")
+                return
+
+            # 读取当前与基线
+            df_curr = pd.read_csv(csv_path, encoding='utf-8-sig')
+            df_base = pd.read_csv(base_path, encoding='utf-8-sig')
+
+            # 统一为字符串比较，空值置空串
+            df_curr_n = df_curr.astype(str).fillna('')
+            df_base_n = df_base.astype(str).fillna('')
+
+            # 检查结构变化
+            added_cols = [c for c in df_curr_n.columns if c not in df_base_n.columns]
+            removed_cols = [c for c in df_base_n.columns if c not in df_curr_n.columns]
+            row_change = len(df_curr_n) - len(df_base_n)
+
+            # 收集数据变更
+            common_cols = [c for c in df_curr_n.columns if c in df_base_n.columns]
+            min_rows = min(len(df_curr_n), len(df_base_n))
+            changes = []
+
+            # 比较公共行的数据变更
+            for i in range(min_rows):
+                for col in common_cols:
+                    v_old = df_base_n.iat[i, df_base_n.columns.get_loc(col)]
+                    v_new = df_curr_n.iat[i, df_curr_n.columns.get_loc(col)]
+                    if v_old != v_new:
+                        row_num = i + 2  # 行号+2(表头+索引)
+
+                        # 使用统一的差异比较工具
+                        diff_changes = self.compare_values_with_diff(v_old, v_new)
+                        if diff_changes:
+                            # 添加详细的变更信息
+                            for change_type, idx, old_item, new_item in diff_changes:
+                                if change_type == '删除':
+                                    if idx > 0:  # 数组项
+                                        changes.append((row_num, f"{col}[{idx}]", old_item, "删除"))
+                                    else:  # 字符串部分
+                                        changes.append((row_num, col, old_item, "删除"))
+                                elif change_type == '新增':
+                                    if idx > 0:  # 数组项
+                                        changes.append((row_num, f"{col}[{idx}]", "新增", new_item))
+                                    else:  # 字符串部分
+                                        changes.append((row_num, col, "新增", new_item))
+                                elif change_type == '替换':
+                                    changes.append((row_num, col, old_item, new_item))
+                        else:
+                            # 如果没有检测到变更，但值确实不同，显示整体变更
+                            changes.append((row_num, col, v_old, v_new))
+
+            # 处理新增行
+            if len(df_curr_n) > len(df_base_n):
+                for i in range(len(df_base_n), len(df_curr_n)):
+                    row_num = i + 2  # 行号+2(表头+索引)
+                    for col in common_cols:
+                        v_new = df_curr_n.iat[i, df_curr_n.columns.get_loc(col)]
+                        # 跳过空值
+                        if pd.notna(v_new) and str(v_new).strip() and str(v_new) != 'nan':
+                            # 检查是否为数组值
+                            array_items = self.parse_array_value(v_new)
+                            if array_items:
+                                # 数组值，拆包为单个项目
+                                for idx, item in enumerate(array_items):
+                                    if item.strip():  # 跳过空项
+                                        changes.append((row_num, f"{col}[{idx}]", "新增", item))
+                            else:
+                                # 普通值
+                                changes.append((row_num, col, "新增", v_new))
+
+            # 处理删除行
+            if len(df_base_n) > len(df_curr_n):
+                for i in range(len(df_curr_n), len(df_base_n)):
+                    row_num = i + 2  # 行号+2(表头+索引)
+                    for col in common_cols:
+                        v_old = df_base_n.iat[i, df_base_n.columns.get_loc(col)]
+                        # 跳过空值
+                        if pd.notna(v_old) and str(v_old).strip() and str(v_old) != 'nan':
+                            # 检查是否为数组值
+                            array_items = self.parse_array_value(v_old)
+                            if array_items:
+                                # 数组值，拆包为单个项目
+                                for idx, item in enumerate(array_items):
+                                    if item.strip():  # 跳过空项
+                                        changes.append((row_num, f"{col}[{idx}]", item, "删除"))
+                            else:
+                                # 普通值
+                                changes.append((row_num, col, v_old, "删除"))
+
+            # 打印摘要
+            if added_cols or removed_cols or row_change != 0:
+                print(f"  结构变更:")
+                if added_cols:
+                    print(f"    新增列: {', '.join(added_cols)}")
+                if removed_cols:
+                    print(f"    删除列: {', '.join(removed_cols)}")
+                if row_change != 0:
+                    print(f"    行数变化: {'+' if row_change > 0 else ''}{row_change}")
+
+            if changes:
+                print(f"  数据变更 ({len(changes)} 处):")
+
+                # 对变更进行排序：先按行号，再按列名（去掉数组索引部分）
+                def sort_key(change):
+                    row, col, _, _ = change
+                    # 提取基础列名（去掉[索引]部分）
+                    base_col = col.split('[')[0] if '[' in col else col
+                    return (row, base_col, col)  # 行号、基础列名、完整列名
+
+                sorted_changes = sorted(changes, key=sort_key)
+
+                # 显示所有变更，使用对齐格式
+                display_changes = sorted_changes
+
+                # 计算各列的最大宽度
+                max_row_col_width = 0
+                max_old_width = 0
+                formatted_changes = []
+
+                for row, col, old_val, new_val in display_changes:
+                    row_col = f"行{row} [{col}]"
+                    old_display = self.truncate_text(old_val, 35)
+                    new_display = self.truncate_text(new_val, 35)
+
+                    max_row_col_width = max(max_row_col_width, self.get_display_width(row_col))
+                    max_old_width = max(max_old_width, self.get_display_width(old_display))
+
+                    formatted_changes.append((row_col, old_display, new_display))
+
+                # 输出对齐的表格
+                for row_col, old_display, new_display in formatted_changes:
+                    # 计算需要的空格数来对齐
+                    row_col_padding = max_row_col_width - self.get_display_width(row_col)
+                    old_padding = max_old_width - self.get_display_width(old_display)
+
+                    print(f"    {row_col}{' ' * row_col_padding}  {old_display}{' ' * old_padding}  →  {new_display}")
+            else:
+                if not (added_cols or removed_cols or row_change != 0):
+                    print(f"  无变更")
+
+        except Exception as e:
+            print(f"  比对失败: {e}")
+
     def convert(self, command):
         """执行转换操作"""
         try:
@@ -553,15 +817,18 @@ class ExcelToCSVConverter:
             print(f"正在保存为CSV文件: {output_filename}")
             output_path = self.save_to_csv(df_processed, output_filename)
 
-            print(f"✅ 转换完成!")
-            print(f"输出文件: {output_path}")
-            print(f"数据行数: {len(df_processed)}")
-            print(f"数据列数: {len(df_processed.columns)}")
+            # 首次导出时保存基线备份（如已存在则不覆盖）
+            base_output_path = self.base_folder / output_filename
+            try:
+                if not base_output_path.exists():
+                    shutil.copyfile(output_path, base_output_path)
+                    print(f"保存基线备份: {base_output_path.name}")
+                else:
+                    print(f"基线备份已存在: {base_output_path.name}")
+            except Exception as be:
+                print(f"保存基线备份失败: {be}")
 
-            # 显示前几行数据预览
-            if len(df_processed) > 0:
-                print("\n数据预览:")
-                print(df_processed.head().to_string())
+            print(f"输出: {output_path.name} ({len(df_processed)}行 x {len(df_processed.columns)}列)")
 
         except Exception as e:
             print(f"❌ 转换失败: {str(e)}")
@@ -589,18 +856,14 @@ class ExcelToCSVConverter:
         """将CSV文件内容写回到Excel文件的指定工作表"""
         try:
             # 读取CSV文件
-            print(f"正在读取CSV文件: {csv_file_path}")
             df = pd.read_csv(csv_file_path, encoding='utf-8-sig')
 
             # 处理CSV内容，将t_*{中文}格式还原为t_*格式
-            print("正在处理CSV内容，还原t_*字符串格式...")
             for col in df.columns:
                 df[col] = df[col].astype(str).apply(lambda x: self.process_csv_content(x) if pd.notna(x) and x != 'nan' else x)
 
             # 将'nan'字符串转换回NaN
             df = df.replace('nan', pd.NA)
-
-            print(f"CSV数据: {len(df)} 行, {len(df.columns)} 列")
 
             # 检查Excel文件类型并写入
             file_extension = Path(excel_file_path).suffix.lower()
@@ -611,9 +874,6 @@ class ExcelToCSVConverter:
                 self.write_to_xls(df, excel_file_path, sheet_name)
             else:
                 raise ValueError(f"不支持的Excel文件格式: {file_extension}")
-
-            print(f"✅ 成功将CSV数据写入Excel文件: {excel_file_path}")
-            print(f"工作表: {sheet_name}")
 
         except Exception as e:
             raise Exception(f"写入Excel文件失败: {str(e)}")
@@ -767,11 +1027,7 @@ class ExcelToCSVConverter:
     def update_excel_from_csv(self):
         """遍历xls文件夹中的CSV文件，将其内容写回到对应的Excel文件"""
         try:
-            print("Excel更新工具")
-            print("="*50)
-            print(f"CSV文件夹: {self.output_folder}")
-            print(f"目标Excel文件夹: {self.target_folder}")
-            print("="*50)
+
 
             # 查找所有CSV文件
             csv_files = list(self.output_folder.glob("*.csv"))
@@ -780,9 +1036,12 @@ class ExcelToCSVConverter:
                 print(f"在文件夹 '{self.output_folder}' 中未找到CSV文件")
                 return False
 
-            print(f"找到 {len(csv_files)} 个CSV文件:")
-            for csv_file in csv_files:
-                print(f"  {csv_file.name}")
+            if len(csv_files) == 1:
+                print(f"找到 1 个CSV文件: {csv_files[0].name}")
+            else:
+                print(f"找到 {len(csv_files)} 个CSV文件:")
+                for csv_file in csv_files:
+                    print(f"  {csv_file.name}")
             print()
 
             success_count = 0
@@ -790,54 +1049,43 @@ class ExcelToCSVConverter:
             # 处理每个CSV文件
             for csv_file in csv_files:
                 try:
-                    # 解析CSV文件名，提取Excel文件名和工作表名
-                    # 格式: filename[sheetname].csv
-                    csv_filename = csv_file.stem  # 去掉.csv扩展名
-
+                    # 解析CSV文件名
+                    csv_filename = csv_file.stem
                     if '[' not in csv_filename or ']' not in csv_filename:
-                        print(f"⚠️  跳过文件 {csv_file.name}: 文件名格式不正确")
+                        print(f"跳过 {csv_file.name} (格式错误)")
                         continue
 
-                    # 分离文件名和工作表名
                     file_part, sheet_part = csv_filename.split('[', 1)
                     sheet_name = sheet_part.rstrip(']')
-                    excel_filename = f"{file_part.strip()}.xls"  # 默认添加.xls扩展名
+                    excel_filename = f"{file_part.strip()}.xls"
 
-                    print(f"处理文件: {csv_file.name}")
-                    print(f"  目标Excel文件: {excel_filename}")
-                    print(f"  目标工作表: {sheet_name}")
+                    print(f"处理 {csv_file.name} → {excel_filename}[{sheet_name}]")
 
-                    # 查找对应的Excel文件
+                    # 查找Excel文件
                     excel_file_path = self.find_excel_file(excel_filename)
                     if not excel_file_path:
-                        print(f"  ❌ 未找到对应的Excel文件: {excel_filename}")
+                        print(f"  错误: 未找到 {excel_filename}")
                         continue
 
-                    # 记录更新前的工作表顺序
-                    original_sheet_names = self.get_sheet_names(excel_file_path)
-                    print(f"  更新前工作表顺序: {original_sheet_names}")
+                    # 与基线比对
+                    self.show_diff_with_baseline(csv_file)
 
-                    # 将CSV内容写入Excel文件
+                    # 写入Excel
                     self.write_csv_to_excel(csv_file, excel_file_path, sheet_name)
-
-                    # 验证更新后的工作表顺序
-                    updated_sheet_names = self.get_sheet_names(excel_file_path)
-                    print(f"  更新后工作表顺序: {updated_sheet_names}")
-
-                    # 检查顺序是否保持不变
-                    if original_sheet_names == updated_sheet_names:
-                        print(f"  ✅ 成功更新，工作表顺序保持不变")
-                    else:
-                        print(f"  ⚠️  更新成功，但工作表顺序发生变化")
+                    print(f"  完成写入")
 
                     success_count += 1
 
                 except Exception as e:
-                    print(f"  ❌ 处理失败: {str(e)}")
+                    print(f"  错误: {str(e)}")
 
                 print()
 
-            print(f"🎉 更新完成! 成功处理 {success_count}/{len(csv_files)} 个文件")
+            # 结果摘要
+            if success_count == len(csv_files):
+                print(f"✅ 全部完成 ({success_count}/{len(csv_files)})")
+            else:
+                print(f"⚠️ 部分完成 ({success_count}/{len(csv_files)})")
             return success_count > 0
 
         except Exception as e:
@@ -852,37 +1100,32 @@ def main():
     # 检查命令行参数
     if len(sys.argv) == 1:
         # 没有参数，执行CSV到Excel的更新操作
-        print("Excel更新工具 - 将CSV文件写回Excel")
-        print("="*50)
+        print("Excel更新工具")
         print(f"目标文件夹: {TARGET_FOLDER}")
-        print(f"CSV文件夹: {Path.cwd()}/{OUTPUT_FOLDER}")
-        print("="*50)
+        print(f"CSV文件夹: {converter.output_folder}")
+        print(f"基线文件夹: {converter.base_folder}")
+        print()
 
         success = converter.update_excel_from_csv()
 
-        if success:
-            print("\n🎉 更新任务完成!")
-        else:
-            print("\n💥 更新任务失败!")
+        # success 结果已在 update_excel_from_csv 中显示
 
     elif len(sys.argv) == 2:
         # 有一个参数，执行Excel到CSV的导出操作
         command = sys.argv[1]
 
-        print("Excel工作表导出为CSV工具")
-        print("="*50)
+        print("Excel导出工具")
         print(f"目标文件夹: {TARGET_FOLDER}")
         print(f"输出文件夹: {Path.cwd()}/{OUTPUT_FOLDER}")
-        print("="*50)
-        print(f"执行命令: {command}")
+        print(f"执行: {command}")
         print()
 
         success = converter.convert(command)
 
         if success:
-            print("\n🎉 导出任务完成!")
+            print("✅ 导出完成")
         else:
-            print("\n💥 导出任务失败!")
+            print("❌ 导出失败")
     else:
         # 参数错误
         print("Excel配置工具")
