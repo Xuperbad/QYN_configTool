@@ -767,6 +767,790 @@ class ExcelTextReplacer:
 
         return results
 
+    def update_language_text_by_id(self, t_id, new_chinese_text, directory=None):
+        """更新指定ID的中文文本
+
+        Args:
+            t_id: 要更新的ID（如 t_heronew_name500001）
+            new_chinese_text: 新的中文文本
+            directory: 搜索目录，如果为None则使用TARGET_FOLDER
+
+        Returns:
+            bool: 是否更新成功
+        """
+        if directory is None:
+            directory = TARGET_FOLDER
+
+        if not directory:
+            return False
+
+        excel_files = self.find_excel_files(directory)
+        if not excel_files:
+            return False
+
+        # 查找所有匹配的条目
+        matching_results = []
+        for file_path in excel_files:
+            file_extension = Path(file_path).suffix.lower()
+
+            if file_extension == '.xlsx':
+                results = self._search_chinese_in_xlsx(t_id, file_path)
+            elif file_extension == '.xls':
+                results = self._search_chinese_in_xls(t_id, file_path)
+            else:
+                continue
+
+            matching_results.extend(results)
+
+        if len(matching_results) == 1:
+            # 找到唯一匹配项，更新它
+            result = matching_results[0]
+            print(f"  更新现有条目: {t_id} -> {new_chinese_text}")
+            return self._update_language_text_in_file(
+                Path(directory) / result['file'],
+                result['sheet'],
+                result['row'] - 1,  # 转换为0基索引
+                new_chinese_text
+            )
+        elif len(matching_results) == 0:
+            # 没找到匹配项，尝试新增
+            print(f"  未找到现有条目，尝试新增: {t_id} -> {new_chinese_text}")
+            return self._auto_add_new_language_entry(t_id, new_chinese_text, directory)
+        else:
+            # 找到多个匹配项，无法确定唯一目标
+            print(f"  找到 {len(matching_results)} 个匹配项，无法确定唯一更新目标")
+            for result in matching_results:
+                print(f"    - {result['file']}[{result['sheet']}] 行{result['row']}")
+            return False
+
+    def _auto_add_new_language_entry(self, t_id, chinese_text, directory):
+        """自动确定目标文件并新增语言条目"""
+        # 根据t_id前缀确定目标文件
+        target_file, target_sheet = self._determine_language_file_by_id(t_id)
+
+        if not target_file:
+            print(f"    无法确定 {t_id} 应该添加到哪个语言文件")
+            return False
+
+        target_file_path = Path(directory) / target_file
+
+        if not target_file_path.exists():
+            print(f"    目标文件不存在: {target_file}")
+            return False
+
+        print(f"    新增到 {target_file}[{target_sheet}]: {t_id} -> {chinese_text}")
+        return self.add_new_language_entry(t_id, chinese_text, str(target_file_path), target_sheet)
+
+    def _determine_language_file_by_id(self, t_id):
+        """根据t_id确定应该添加到哪个语言文件
+
+        Args:
+            t_id: t_*格式的标识符
+
+        Returns:
+            tuple: (文件名, 工作表名) 或 (None, None)
+        """
+        # 根据实际存在的语言文件和t_id前缀确定目标文件
+        # 优先使用实际存在的文件
+
+        if t_id.startswith('t_heronew_name') or t_id.startswith('t_hero'):
+            # 英雄相关的语言文本，优先使用tableLang.xls
+            return ('tableLang.xls', 'functionLang')
+        elif t_id.startswith('t_skillnew_name') or t_id.startswith('t_skill'):
+            # 技能相关的语言文本，使用tableLang.xls
+            return ('tableLang.xls', 'functionLang')
+        elif t_id.startswith('t_itemnew_name') or t_id.startswith('t_item'):
+            # 物品相关的语言文本，使用tableLang.xls
+            return ('tableLang.xls', 'functionLang')
+        elif t_id.startswith('t_heroSkillnew_name') or t_id.startswith('t_heroSkill'):
+            # 英雄技能相关的语言文本，使用tableLang.xls
+            return ('tableLang.xls', 'functionLang')
+        elif t_id.startswith('t_act'):
+            # 活动相关的语言文本，使用actLang.xls
+            return ('actLang.xls', 'actLang')
+        elif t_id.startswith('t_client'):
+            # 客户端相关的语言文本，使用clientLang.xls
+            return ('clientLang.xls', 'clientLang')
+        elif t_id.startswith('t_core'):
+            # 核心相关的语言文本，使用coreLang.xls
+            return ('coreLang.xls', 'coreLang')
+        else:
+            # 默认添加到tableLang.xls（最通用的语言文件）
+            return ('tableLang.xls', 'functionLang')
+
+    def _update_language_text_in_file(self, file_path, sheet_name, row_idx, new_text):
+        """在指定文件中更新语言文本"""
+        try:
+            file_extension = file_path.suffix.lower()
+
+            if file_extension == '.xlsx':
+                return self._update_text_in_xlsx(file_path, sheet_name, row_idx, new_text)
+            elif file_extension == '.xls':
+                return self._update_text_in_xls(file_path, sheet_name, row_idx, new_text)
+            else:
+                return False
+
+        except Exception as e:
+            print(f"更新语言文本时出错: {str(e)}")
+            return False
+
+    def _update_text_in_xlsx(self, file_path, sheet_name, row_idx, new_text):
+        """在.xlsx文件中更新文本"""
+        try:
+            workbook = openpyxl.load_workbook(file_path)
+
+            if sheet_name not in workbook.sheetnames:
+                workbook.close()
+                return False
+
+            sheet = workbook[sheet_name]
+
+            # 更新第3列（索引为2）的文本
+            if sheet.max_row > row_idx and sheet.max_column >= 3:
+                sheet.cell(row=row_idx + 1, column=3, value=new_text)
+                workbook.save(file_path)
+                workbook.close()
+                print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_idx + 1}")
+                return True
+            else:
+                workbook.close()
+                return False
+
+        except Exception as e:
+            print(f"更新.xlsx文件时出错: {str(e)}")
+            return False
+
+    def _update_text_in_xls(self, file_path, sheet_name, row_idx, new_text):
+        """在.xls文件中更新文本（需要重写整个文件）"""
+        try:
+            # 读取原文件的所有数据
+            old_workbook = xlrd.open_workbook(file_path)
+
+            # 创建新的工作簿
+            new_workbook = xlwt.Workbook()
+
+            # 复制所有工作表
+            for sheet_idx in range(old_workbook.nsheets):
+                old_sheet = old_workbook.sheet_by_index(sheet_idx)
+                old_sheet_name = old_sheet.name
+                new_sheet = new_workbook.add_sheet(old_sheet_name)
+
+                # 复制所有数据
+                for r in range(old_sheet.nrows):
+                    for c in range(old_sheet.ncols):
+                        cell_value = old_sheet.cell_value(r, c)
+
+                        # 如果是目标位置，使用新文本
+                        if (old_sheet_name == sheet_name and
+                            r == row_idx and c == 2):  # 第3列
+                            new_sheet.write(r, c, new_text)
+                        else:
+                            new_sheet.write(r, c, cell_value)
+
+            # 保存新文件
+            new_workbook.save(file_path)
+            print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_idx + 1}")
+            return True
+
+        except Exception as e:
+            print(f"更新.xls文件时出错: {str(e)}")
+            return False
+
+    def add_new_language_entry(self, t_id, chinese_text, target_file_path, target_sheet_name):
+        """在指定文件中新增语言条目
+
+        Args:
+            t_id: 语言ID
+            chinese_text: 中文文本
+            target_file_path: 目标文件路径
+            target_sheet_name: 目标工作表名
+
+        Returns:
+            bool: 是否新增成功
+        """
+        try:
+            file_path = Path(target_file_path)
+            file_extension = file_path.suffix.lower()
+
+            if file_extension == '.xlsx':
+                return self._add_entry_to_xlsx(file_path, target_sheet_name, t_id, chinese_text)
+            elif file_extension == '.xls':
+                return self._add_entry_to_xls(file_path, target_sheet_name, t_id, chinese_text)
+            else:
+                return False
+
+        except Exception as e:
+            print(f"新增语言条目时出错: {str(e)}")
+            return False
+
+    def _add_entry_to_xlsx(self, file_path, sheet_name, t_id, chinese_text):
+        """在.xlsx文件中新增条目"""
+        try:
+            if file_path.exists():
+                workbook = openpyxl.load_workbook(file_path)
+            else:
+                workbook = openpyxl.Workbook()
+                # 删除默认工作表
+                if 'Sheet' in workbook.sheetnames:
+                    del workbook['Sheet']
+
+            # 获取或创建工作表
+            if sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+            else:
+                sheet = workbook.create_sheet(sheet_name)
+                # 添加表头
+                sheet.cell(row=1, column=1, value="ID")
+                sheet.cell(row=1, column=2, value="英文")
+                sheet.cell(row=1, column=3, value="中文")
+
+            # 找到下一个空行
+            next_row = sheet.max_row + 1
+
+            # 添加新条目
+            sheet.cell(row=next_row, column=1, value=t_id)
+            sheet.cell(row=next_row, column=2, value="")  # 英文列暂时为空
+            sheet.cell(row=next_row, column=3, value=chinese_text)
+
+            workbook.save(file_path)
+            workbook.close()
+            print(f"  已新增条目到 {file_path.name}[{sheet_name}] 行{next_row}")
+            return True
+
+        except Exception as e:
+            print(f"新增条目到.xlsx文件时出错: {str(e)}")
+            return False
+
+    def _add_entry_to_xls(self, file_path, sheet_name, t_id, chinese_text):
+        """在.xls文件中新增条目（需要重写整个文件）"""
+        try:
+            existing_sheets = []
+            target_sheet_found = False
+
+            # 如果文件存在，读取现有数据
+            if file_path.exists():
+                old_workbook = xlrd.open_workbook(file_path)
+
+                for sheet_idx in range(old_workbook.nsheets):
+                    old_sheet = old_workbook.sheet_by_index(sheet_idx)
+                    old_sheet_name = old_sheet.name
+
+                    # 读取工作表数据
+                    sheet_data = []
+                    for row_idx in range(old_sheet.nrows):
+                        row_data = []
+                        for col_idx in range(old_sheet.ncols):
+                            cell_value = old_sheet.cell_value(row_idx, col_idx)
+                            row_data.append(cell_value)
+                        sheet_data.append(row_data)
+
+                    existing_sheets.append((old_sheet_name, sheet_data))
+
+                    if old_sheet_name == sheet_name:
+                        target_sheet_found = True
+
+            # 如果目标工作表不存在，创建一个
+            if not target_sheet_found:
+                # 创建表头
+                header_row = [t_id, "", chinese_text]  # ID, 英文, 中文
+                existing_sheets.append((sheet_name, [["ID", "英文", "中文"], header_row]))
+
+            # 创建新工作簿
+            new_workbook = xlwt.Workbook()
+
+            for sheet_name_iter, sheet_data in existing_sheets:
+                new_sheet = new_workbook.add_sheet(sheet_name_iter)
+
+                # 如果是目标工作表，添加新条目
+                if sheet_name_iter == sheet_name:
+                    # 复制现有数据
+                    for row_idx, row_data in enumerate(sheet_data):
+                        for col_idx, cell_value in enumerate(row_data):
+                            new_sheet.write(row_idx, col_idx, cell_value)
+
+                    # 添加新条目
+                    new_row_idx = len(sheet_data)
+                    new_sheet.write(new_row_idx, 0, t_id)
+                    new_sheet.write(new_row_idx, 1, "")  # 英文列
+                    new_sheet.write(new_row_idx, 2, chinese_text)
+
+                    print(f"  已新增条目到 {file_path.name}[{sheet_name}] 行{new_row_idx + 1}")
+                else:
+                    # 复制其他工作表的数据
+                    for row_idx, row_data in enumerate(sheet_data):
+                        for col_idx, cell_value in enumerate(row_data):
+                            new_sheet.write(row_idx, col_idx, cell_value)
+
+            new_workbook.save(file_path)
+            return True
+
+        except Exception as e:
+            print(f"新增条目到.xls文件时出错: {str(e)}")
+            return False
+
+    def update_cell_value_precisely(self, excel_file_path, sheet_name, row_num, col_name, new_value, arr_pos, arr_type, change_type):
+        """精确更新Excel单元格的值
+
+        Args:
+            excel_file_path: Excel文件路径
+            sheet_name: 工作表名
+            row_num: 行号（1基索引，包含表头）
+            col_name: 列名
+            new_value: 新值
+            arr_pos: 数组位置索引
+            arr_type: 数组类型 ('single', ',', '[]')
+            change_type: 变更类型 ('新增', '删除', '替换')
+
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            file_path = Path(excel_file_path)
+            file_extension = file_path.suffix.lower()
+
+            if file_extension == '.xlsx':
+                return self._update_cell_in_xlsx(file_path, sheet_name, row_num, col_name, new_value, arr_pos, arr_type, change_type)
+            elif file_extension == '.xls':
+                return self._update_cell_in_xls(file_path, sheet_name, row_num, col_name, new_value, arr_pos, arr_type, change_type)
+            else:
+                print(f"不支持的文件格式: {file_extension}")
+                return False
+
+        except Exception as e:
+            print(f"精确更新单元格时出错: {str(e)}")
+            return False
+
+    def _update_cell_in_xlsx(self, file_path, sheet_name, row_num, col_name, new_value, arr_pos, arr_type, change_type):
+        """在.xlsx文件中精确更新单元格"""
+        try:
+            workbook = openpyxl.load_workbook(file_path)
+
+            if sheet_name not in workbook.sheetnames:
+                print(f"工作表 '{sheet_name}' 不存在")
+                workbook.close()
+                return False
+
+            sheet = workbook[sheet_name]
+
+            # 找到列索引
+            col_idx = self._find_column_index(sheet, col_name)
+            if col_idx is None:
+                print(f"列 '{col_name}' 不存在")
+                workbook.close()
+                return False
+
+            # 检查行是否存在
+            if row_num > sheet.max_row:
+                print(f"行 {row_num} 超出范围")
+                workbook.close()
+                return False
+
+            # 获取当前单元格值
+            current_cell = sheet.cell(row=row_num, column=col_idx)
+            current_value = current_cell.value or ""
+
+            # 根据数组类型和变更类型更新值
+            updated_value = self._apply_array_change(str(current_value), new_value, arr_pos, arr_type, change_type)
+
+            # 更新单元格
+            current_cell.value = updated_value
+
+            workbook.save(file_path)
+            workbook.close()
+
+            print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_num} 列{col_name}")
+            return True
+
+        except Exception as e:
+            print(f"更新.xlsx单元格时出错: {str(e)}")
+            return False
+
+    def _find_column_index(self, sheet, col_name):
+        """查找列名对应的索引"""
+        for col_idx, cell in enumerate(sheet[1], 1):  # 第一行是表头
+            if cell.value == col_name:
+                return col_idx
+        return None
+
+    def _apply_array_change(self, current_value, new_value, arr_pos, arr_type, change_type):
+        """应用数组变更到当前值
+
+        Args:
+            current_value: 当前单元格值
+            new_value: 新值
+            arr_pos: 数组位置
+            arr_type: 数组类型
+            change_type: 变更类型
+
+        Returns:
+            str: 更新后的值
+        """
+        if arr_type == 'single':
+            # 单个值直接替换
+            if change_type == '删除':
+                return ""
+            else:
+                return new_value
+
+        # 解析当前值为数组
+        current_items = self._parse_value_to_array(current_value, arr_type)
+
+        # 应用变更
+        if change_type == '删除':
+            # 删除指定位置的项目
+            if 0 <= arr_pos < len(current_items):
+                current_items.pop(arr_pos)
+        elif change_type == '新增':
+            # 在指定位置插入新项目
+            if arr_pos <= len(current_items):
+                current_items.insert(arr_pos, new_value)
+            else:
+                current_items.append(new_value)
+        elif change_type == '替换':
+            # 替换指定位置的项目
+            if 0 <= arr_pos < len(current_items):
+                current_items[arr_pos] = new_value
+            else:
+                current_items.append(new_value)
+
+        # 重新组装为原始格式
+        return self._format_array_to_string(current_items, arr_type)
+
+    def _parse_value_to_array(self, value, arr_type):
+        """将值解析为数组"""
+        if not value or not isinstance(value, str):
+            return []
+
+        value = value.strip()
+        if not value:
+            return []
+
+        if arr_type == '[]':
+            # [aa, bb] 格式
+            if value.startswith('[') and value.endswith(']'):
+                inner = value[1:-1].strip()
+                if inner:
+                    return [item.strip() for item in inner.split(',') if item.strip()]
+            return []
+        elif arr_type == ',':
+            # aa, bb 格式
+            return [item.strip() for item in value.split(',') if item.strip()]
+        else:
+            # single 格式
+            return [value] if value else []
+
+    def _format_array_to_string(self, items, arr_type):
+        """将数组格式化为字符串"""
+        if not items:
+            return ""
+
+        if arr_type == '[]':
+            return f"[{', '.join(items)}]"
+        elif arr_type == ',':
+            return ', '.join(items)
+        else:  # single
+            return items[0] if items else ""
+
+    def _update_cell_in_xls(self, file_path, sheet_name, row_num, col_name, new_value, arr_pos, arr_type, change_type):
+        """在.xls文件中精确更新单元格（需要重写整个文件）"""
+        try:
+            # 读取原文件的所有数据
+            old_workbook = xlrd.open_workbook(file_path)
+
+            # 找到目标工作表
+            target_sheet = None
+            for sheet_idx in range(old_workbook.nsheets):
+                sheet = old_workbook.sheet_by_index(sheet_idx)
+                if sheet.name == sheet_name:
+                    target_sheet = sheet
+                    break
+
+            if target_sheet is None:
+                print(f"工作表 '{sheet_name}' 不存在")
+                return False
+
+            # 找到列索引
+            col_idx = None
+            for c in range(target_sheet.ncols):
+                if target_sheet.cell_value(0, c) == col_name:  # 第0行是表头
+                    col_idx = c
+                    break
+
+            if col_idx is None:
+                print(f"列 '{col_name}' 不存在")
+                return False
+
+            # 检查行是否存在
+            if row_num - 1 >= target_sheet.nrows:  # row_num是1基索引
+                print(f"行 {row_num} 超出范围")
+                return False
+
+            # 创建新的工作簿
+            new_workbook = xlwt.Workbook()
+
+            # 复制所有工作表
+            for sheet_idx in range(old_workbook.nsheets):
+                old_sheet = old_workbook.sheet_by_index(sheet_idx)
+                old_sheet_name = old_sheet.name
+                new_sheet = new_workbook.add_sheet(old_sheet_name)
+
+                # 复制所有数据
+                for r in range(old_sheet.nrows):
+                    for c in range(old_sheet.ncols):
+                        cell_value = old_sheet.cell_value(r, c)
+
+                        # 如果是目标位置，应用变更
+                        if (old_sheet_name == sheet_name and
+                            r == row_num - 1 and c == col_idx):  # 转换为0基索引
+
+                            # 应用数组变更
+                            updated_value = self._apply_array_change(
+                                str(cell_value), new_value, arr_pos, arr_type, change_type
+                            )
+                            new_sheet.write(r, c, updated_value)
+                        else:
+                            new_sheet.write(r, c, cell_value)
+
+            # 保存新文件
+            new_workbook.save(file_path)
+            print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_num} 列{col_name}")
+            return True
+
+        except Exception as e:
+            print(f"更新.xls单元格时出错: {str(e)}")
+            return False
+
+    def update_cell_with_multiple_changes(self, excel_file_path, sheet_name, row_num, col_name, cell_changes):
+        """处理单元格的多个变更
+
+        Args:
+            excel_file_path: Excel文件路径
+            sheet_name: 工作表名
+            row_num: 行号
+            col_name: 列名
+            cell_changes: 变更列表，每个变更包含 old_item, new_item, arr_pos, arr_type
+
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            file_path = Path(excel_file_path)
+            file_extension = file_path.suffix.lower()
+
+            if file_extension == '.xlsx':
+                return self._update_cell_with_changes_xlsx(file_path, sheet_name, row_num, col_name, cell_changes)
+            elif file_extension == '.xls':
+                return self._update_cell_with_changes_xls(file_path, sheet_name, row_num, col_name, cell_changes)
+            else:
+                print(f"不支持的文件格式: {file_extension}")
+                return False
+
+        except Exception as e:
+            print(f"处理单元格多个变更时出错: {str(e)}")
+            return False
+
+    def _update_cell_with_changes_xlsx(self, file_path, sheet_name, row_num, col_name, cell_changes):
+        """在.xlsx文件中处理单元格的多个变更"""
+        try:
+            workbook = openpyxl.load_workbook(file_path)
+
+            if sheet_name not in workbook.sheetnames:
+                print(f"工作表 '{sheet_name}' 不存在")
+                workbook.close()
+                return False
+
+            sheet = workbook[sheet_name]
+
+            # 找到列索引
+            col_idx = self._find_column_index(sheet, col_name)
+            if col_idx is None:
+                print(f"列 '{col_name}' 不存在")
+                workbook.close()
+                return False
+
+            # 检查行是否存在
+            if row_num > sheet.max_row:
+                print(f"行 {row_num} 超出范围")
+                workbook.close()
+                return False
+
+            # 获取当前单元格值
+            current_cell = sheet.cell(row=row_num, column=col_idx)
+            current_value = current_cell.value or ""
+
+            # 应用所有变更到当前值
+            updated_value = self._apply_multiple_changes_to_value(str(current_value), cell_changes)
+
+            # 格式还原处理：只还原加工过程中添加的注释
+            final_value = self._restore_processed_annotations(updated_value)
+
+            # 更新单元格
+            current_cell.value = final_value
+
+            workbook.save(file_path)
+            workbook.close()
+
+            print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_num} 列{col_name}")
+            return True
+
+        except Exception as e:
+            print(f"更新.xlsx单元格时出错: {str(e)}")
+            return False
+
+    def _apply_multiple_changes_to_value(self, current_value, cell_changes):
+        """将多个变更应用到单个值
+
+        这个方法需要智能地处理同一个单元格的多个变更，
+        比如删除和新增操作需要合并处理
+        """
+        if not cell_changes:
+            return current_value
+
+        # 获取第一个变更的数组类型（假设同一单元格的变更类型一致）
+        arr_type = cell_changes[0]['arr_type']
+
+        # 解析当前值为数组
+        current_items = self._parse_value_to_array(current_value, arr_type)
+
+        # 按位置分组变更
+        changes_by_pos = {}
+        for change in cell_changes:
+            pos = change['arr_pos']
+            if pos not in changes_by_pos:
+                changes_by_pos[pos] = []
+            changes_by_pos[pos].append(change)
+
+        # 按位置从高到低处理（避免索引变化影响）
+        for pos in sorted(changes_by_pos.keys(), reverse=True):
+            pos_changes = changes_by_pos[pos]
+
+            # 处理该位置的变更
+            for change in pos_changes:
+                old_item = change['old_item']
+                new_item = change['new_item']
+
+                if old_item and new_item:
+                    # 替换操作
+                    if 0 <= pos < len(current_items):
+                        current_items[pos] = new_item
+                elif new_item and not old_item:
+                    # 新增操作
+                    if pos <= len(current_items):
+                        current_items.insert(pos, new_item)
+                    else:
+                        current_items.append(new_item)
+                elif old_item and not new_item:
+                    # 删除操作
+                    if 0 <= pos < len(current_items):
+                        current_items.pop(pos)
+
+        # 重新组装为原始格式
+        return self._format_array_to_string(current_items, arr_type)
+
+    def _restore_processed_annotations(self, value):
+        """格式还原处理：只还原加工过程中添加的注释
+
+        这个方法只处理两种加工过程中添加的注释格式：
+        1. t_*{中文} - 语言文本注释
+        2. 数字{中文} - ID关联注释
+
+        不处理原本就存在的配置数据，如：力量{+10}
+
+        Args:
+            value: 包含注释的值
+
+        Returns:
+            str: 还原后的值
+        """
+        if not value or not isinstance(value, str):
+            return value
+
+        import re
+
+        # 只处理 t_*{中文} 格式（语言文本注释）
+        t_pattern = r't_([a-zA-Z0-9_]+)\{[^}]*\}'
+        processed_value = re.sub(t_pattern, r't_\1', value)
+
+        # 只处理 数字{中文} 格式（ID关联注释）
+        # 注意：这里要确保是纯数字开头的，避免误处理如 "力量100{+10}" 这样的配置
+        id_pattern = r'\b(\d+)\{[^}]*\}'
+        processed_value = re.sub(id_pattern, r'\1', processed_value)
+
+        return processed_value
+
+    def _update_cell_with_changes_xls(self, file_path, sheet_name, row_num, col_name, cell_changes):
+        """在.xls文件中处理单元格的多个变更（需要重写整个文件）"""
+        try:
+            # 读取原文件的所有数据
+            old_workbook = xlrd.open_workbook(file_path)
+
+            # 找到目标工作表
+            target_sheet = None
+            for sheet_idx in range(old_workbook.nsheets):
+                sheet = old_workbook.sheet_by_index(sheet_idx)
+                if sheet.name == sheet_name:
+                    target_sheet = sheet
+                    break
+
+            if target_sheet is None:
+                print(f"工作表 '{sheet_name}' 不存在")
+                return False
+
+            # 找到列索引
+            col_idx = None
+            for c in range(target_sheet.ncols):
+                if target_sheet.cell_value(0, c) == col_name:  # 第0行是表头
+                    col_idx = c
+                    break
+
+            if col_idx is None:
+                print(f"列 '{col_name}' 不存在")
+                return False
+
+            # 检查行是否存在
+            if row_num - 1 >= target_sheet.nrows:  # row_num是1基索引
+                print(f"行 {row_num} 超出范围")
+                return False
+
+            # 获取当前单元格值
+            current_value = target_sheet.cell_value(row_num - 1, col_idx)  # 转换为0基索引
+
+            # 应用所有变更
+            updated_value = self._apply_multiple_changes_to_value(str(current_value), cell_changes)
+
+            # 格式还原处理：只还原加工过程中添加的注释
+            final_value = self._restore_processed_annotations(updated_value)
+
+            # 创建新的工作簿
+            new_workbook = xlwt.Workbook()
+
+            # 复制所有工作表
+            for sheet_idx in range(old_workbook.nsheets):
+                old_sheet = old_workbook.sheet_by_index(sheet_idx)
+                old_sheet_name = old_sheet.name
+                new_sheet = new_workbook.add_sheet(old_sheet_name)
+
+                # 复制所有数据
+                for r in range(old_sheet.nrows):
+                    for c in range(old_sheet.ncols):
+                        cell_value = old_sheet.cell_value(r, c)
+
+                        # 如果是目标位置，使用格式还原后的值
+                        if (old_sheet_name == sheet_name and
+                            r == row_num - 1 and c == col_idx):  # 转换为0基索引
+                            new_sheet.write(r, c, final_value)
+                        else:
+                            new_sheet.write(r, c, cell_value)
+
+            # 保存新文件
+            new_workbook.save(file_path)
+            print(f"  已更新 {file_path.name}[{sheet_name}] 行{row_num} 列{col_name}")
+            return True
+
+        except Exception as e:
+            print(f"更新.xls单元格时出错: {str(e)}")
+            return False
+
     def get_id_for_row(self, file_name, sheet_name, row_idx):
         """获取指定行的ID值（第1列）"""
         # 从搜索结果中查找对应行的ID

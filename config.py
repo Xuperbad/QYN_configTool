@@ -191,7 +191,7 @@ class ExcelToCSVConverter:
 
             return chinese_text
 
-        except Exception as e:
+        except Exception:
             # 如果出现任何错误，返回None
             return None
 
@@ -552,47 +552,72 @@ class ExcelToCSVConverter:
         return result
 
     def parse_array_value(self, value):
-        """解析数组值，支持 'aa, bb' 和 '[aa, bb]' 两种格式"""
+        """解析数组值，统一将所有值视为数组处理
+
+        支持格式：
+        - 单个值: 'aa' -> ['aa']
+        - 逗号分隔: 'aa, bb' -> ['aa', 'bb']
+        - 数组格式: '[aa, bb]' -> ['aa', 'bb']
+
+        Returns:
+            tuple: (items_list, array_type)
+            - items_list: 解析后的项目列表
+            - array_type: 原始格式类型 ('single', ',', '[]')
+        """
         if not value or not isinstance(value, str):
-            return None
+            return [], 'single'
 
         value = value.strip()
         if not value:
-            return None
-
-        # 检查是否包含逗号（数组标识）
-        if ',' not in value:
-            return None
+            return [], 'single'
 
         # 处理 [aa, bb] 格式
         if value.startswith('[') and value.endswith(']'):
             inner = value[1:-1].strip()
             if inner:
                 items = [item.strip() for item in inner.split(',')]
-                return [item for item in items if item]  # 过滤空项
+                return [item for item in items if item], '[]'
+            else:
+                return [], '[]'
 
-        # 处理 aa, bb 格式
-        else:
+        # 处理逗号分隔格式 aa, bb
+        elif ',' in value:
             items = [item.strip() for item in value.split(',')]
-            return [item for item in items if item]  # 过滤空项
+            return [item for item in items if item], ','
 
-        return None
+        # 处理单个值 aa
+        else:
+            return [value], 'single'
 
     def compare_values_with_diff(self, old_val, new_val):
-        """使用difflib智能比较两个值，返回变更描述"""
-        # 先尝试数组比较
-        old_items = self.parse_array_value(old_val)
-        new_items = self.parse_array_value(new_val)
+        """使用difflib智能比较两个值，返回变更描述
 
-        # 如果都是数组，进行数组比较
-        if old_items is not None and new_items is not None:
-            return self._compare_array_items(old_items, new_items)
+        统一将所有值视为数组处理，返回6元素元组格式：
+        (change_type, arr_pos, old_item, new_item, original_arr_pos, arr_type)
+        """
+        # 解析为数组格式（统一处理）
+        old_items, old_type = self.parse_array_value(old_val)
+        new_items, new_type = self.parse_array_value(new_val)
 
-        # 如果只有一个是数组，或都不是数组，进行字符串级别比较
-        return self._compare_string_values(str(old_val), str(new_val))
+        # 使用新的数组类型（优先使用new_type，如果为空则使用old_type）
+        arr_type = new_type if new_items else old_type
 
-    def _compare_array_items(self, old_items, new_items):
-        """比较数组项目"""
+        return self._compare_array_items_unified(old_items, new_items, arr_type)
+
+    def _compare_array_items_unified(self, old_items, new_items, arr_type):
+        """统一的数组项目比较方法
+
+        Args:
+            old_items: 旧值的项目列表
+            new_items: 新值的项目列表
+            arr_type: 数组类型 ('single', ',', '[]')
+
+        Returns:
+            list: 变更记录列表，格式为 (change_type, arr_pos, old_item, new_item, original_arr_pos, arr_type)
+        """
+        if old_items == new_items:
+            return []
+
         differ = difflib.SequenceMatcher(None, old_items, new_items)
         opcodes = differ.get_opcodes()
 
@@ -601,33 +626,21 @@ class ExcelToCSVConverter:
             if tag == 'delete':
                 deleted_items = old_items[i1:i2]
                 for idx, item in enumerate(deleted_items):
-                    changes.append(('删除', i1 + idx, item, None))
+                    changes.append(('删除', i1 + idx, item, None, i1 + idx, arr_type))
 
             elif tag == 'insert':
                 inserted_items = new_items[j1:j2]
                 for idx, item in enumerate(inserted_items):
-                    changes.append(('新增', j1 + idx, None, item))
+                    changes.append(('新增', j1 + idx, None, item, j1 + idx, arr_type))
 
             elif tag == 'replace':
                 old_part = old_items[i1:i2]
                 new_part = new_items[j1:j2]
                 # 对于替换，我们将其分解为删除+新增
                 for idx, item in enumerate(old_part):
-                    changes.append(('删除', i1 + idx, item, None))
+                    changes.append(('删除', i1 + idx, item, None, i1 + idx, arr_type))
                 for idx, item in enumerate(new_part):
-                    changes.append(('新增', j1 + idx, None, item))
-
-        return changes if changes else None
-
-    def _compare_string_values(self, old_val, new_val):
-        """比较字符串值，对于非数组值直接显示完整的删除和新增"""
-        if old_val == new_val:
-            return None
-
-        # 对于字符串值，直接显示完整的删除和新增
-        changes = []
-        changes.append(('删除', 0, old_val, None))
-        changes.append(('新增', 0, None, new_val))
+                    changes.append(('新增', j1 + idx, None, item, j1 + idx, arr_type))
 
         return changes
 
@@ -669,18 +682,22 @@ class ExcelToCSVConverter:
                         # 使用统一的差异比较工具
                         diff_changes = self.compare_values_with_diff(v_old, v_new)
                         if diff_changes:
-                            # 添加详细的变更信息
-                            for change_type, idx, old_item, new_item in diff_changes:
+                            # 处理变更信息（统一6元素格式）
+                            for change_type, arr_pos, old_item, new_item, _, arr_type in diff_changes:
                                 if change_type == '删除':
-                                    if idx > 0:  # 数组项
-                                        changes.append((row_num, f"{col}[{idx}]", old_item, "删除"))
-                                    else:  # 字符串部分
+                                    if arr_type == 'single':
+                                        # 单个值变更
                                         changes.append((row_num, col, old_item, "删除"))
+                                    else:
+                                        # 数组项变更
+                                        changes.append((row_num, f"{col}[{arr_pos}]", old_item, "删除"))
                                 elif change_type == '新增':
-                                    if idx > 0:  # 数组项
-                                        changes.append((row_num, f"{col}[{idx}]", "新增", new_item))
-                                    else:  # 字符串部分
+                                    if arr_type == 'single':
+                                        # 单个值变更
                                         changes.append((row_num, col, "新增", new_item))
+                                    else:
+                                        # 数组项变更
+                                        changes.append((row_num, f"{col}[{arr_pos}]", "新增", new_item))
                                 elif change_type == '替换':
                                     changes.append((row_num, col, old_item, new_item))
                         else:
@@ -695,16 +712,16 @@ class ExcelToCSVConverter:
                         v_new = df_curr_n.iat[i, df_curr_n.columns.get_loc(col)]
                         # 跳过空值
                         if pd.notna(v_new) and str(v_new).strip() and str(v_new) != 'nan':
-                            # 检查是否为数组值
-                            array_items = self.parse_array_value(v_new)
-                            if array_items:
+                            # 使用统一的数组解析
+                            array_items, arr_type = self.parse_array_value(v_new)
+                            if arr_type == 'single':
+                                # 单个值
+                                changes.append((row_num, col, "新增", v_new))
+                            else:
                                 # 数组值，拆包为单个项目
                                 for idx, item in enumerate(array_items):
                                     if item.strip():  # 跳过空项
                                         changes.append((row_num, f"{col}[{idx}]", "新增", item))
-                            else:
-                                # 普通值
-                                changes.append((row_num, col, "新增", v_new))
 
             # 处理删除行
             if len(df_base_n) > len(df_curr_n):
@@ -714,16 +731,16 @@ class ExcelToCSVConverter:
                         v_old = df_base_n.iat[i, df_base_n.columns.get_loc(col)]
                         # 跳过空值
                         if pd.notna(v_old) and str(v_old).strip() and str(v_old) != 'nan':
-                            # 检查是否为数组值
-                            array_items = self.parse_array_value(v_old)
-                            if array_items:
+                            # 使用统一的数组解析
+                            array_items, arr_type = self.parse_array_value(v_old)
+                            if arr_type == 'single':
+                                # 单个值
+                                changes.append((row_num, col, v_old, "删除"))
+                            else:
                                 # 数组值，拆包为单个项目
                                 for idx, item in enumerate(array_items):
                                     if item.strip():  # 跳过空项
                                         changes.append((row_num, f"{col}[{idx}]", item, "删除"))
-                            else:
-                                # 普通值
-                                changes.append((row_num, col, v_old, "删除"))
 
             # 打印摘要
             if added_cols or removed_cols or row_change != 0:
@@ -851,6 +868,375 @@ class ExcelToCSVConverter:
         processed_content = re.sub(id_pattern, r'\1', processed_content)
 
         return processed_content
+
+    def extract_and_update_language_texts(self, new_item):
+        """从变更项中提取t_*{中文}格式并更新语言表
+
+        Args:
+            new_item: 变更的新值，可能包含t_*{中文}格式
+
+        Returns:
+            bool: 是否有语言文本需要更新
+        """
+        if not new_item or not isinstance(new_item, str):
+            return False
+
+        import re
+
+        # 正则表达式匹配 t_*{中文} 格式
+        pattern = r't_([a-zA-Z0-9_]+)\{([^}]+)\}'
+        matches = re.findall(pattern, new_item)
+
+        if not matches:
+            return False
+
+        print(f"发现 {len(matches)} 个语言文本更新需求")
+
+        # 导入go.py模块
+        try:
+            import sys
+            sys.path.append(str(Path.cwd()))
+            from go import ExcelTextReplacer
+        except Exception as e:
+            print(f"导入go.py模块失败: {str(e)}")
+            return False
+
+        # 创建文本替换器实例
+        replacer = ExcelTextReplacer({})
+
+        success_count = 0
+        for t_id_part, chinese_text in matches:
+            t_full_id = f"t_{t_id_part}"
+            print(f"处理语言文本: {t_full_id} -> {chinese_text}")
+
+            # 直接调用go.py的语言文本更新方法
+            # go.py会自动处理查找、更新或新增逻辑
+            if replacer.update_language_text_by_id(t_full_id, chinese_text):
+                success_count += 1
+            else:
+                print(f"  更新失败: {t_full_id}")
+
+        print(f"语言文本更新完成: {success_count}/{len(matches)}")
+        return success_count > 0
+
+
+
+    def apply_language_text_changes(self, changes):
+        """应用语言文本变更到原文件
+
+        Args:
+            changes: 变更记录列表，格式为 (row_num, col, old_item, new_item, arr_pos, arr_type)
+        """
+        print("开始应用语言文本变更...")
+
+        processed_count = 0
+        for change in changes:
+            if len(change) >= 4:  # 确保有足够的参数
+                _, _, _, new_item = change[:4]  # 只使用new_item
+
+                # 只处理新增和修改的项目
+                if new_item and new_item != "删除":
+                    if self.extract_and_update_language_texts(new_item):
+                        processed_count += 1
+
+        print(f"语言文本变更应用完成，处理了 {processed_count} 个变更项")
+
+    def sync_changes_to_original_files(self, csv_file_path):
+        """将CSV变更同步到原始文件
+
+        这是你提出的完整方案的实现：
+        1. 获取变更记录（包含数组位置和格式信息）
+        2. 先处理语言文本关联（t_*{中文}格式）
+        3. 再处理数据同步到原文件
+
+        Args:
+            csv_file_path: CSV文件路径
+        """
+        try:
+            print("开始同步变更到原始文件...")
+
+            # 1. 获取增强的变更记录
+            enhanced_changes = self.get_enhanced_changes_with_baseline(csv_file_path)
+
+            if not enhanced_changes:
+                print("没有检测到变更，跳过同步")
+                return True
+
+            print(f"检测到 {len(enhanced_changes)} 个变更项")
+
+            # 2. 先处理语言文本关联
+            print("\n步骤1: 处理语言文本关联...")
+            self.apply_language_text_changes(enhanced_changes)
+
+            # 3. 再处理数据同步到原文件
+            print("\n步骤2: 处理数据同步...")
+            self.apply_data_changes_to_original_files(enhanced_changes, csv_file_path)
+
+            # 4. 重新生成CSV和更新基线
+            print("\n步骤3: 更新CSV和基线...")
+            self.refresh_csv_and_baseline_after_sync(csv_file_path)
+
+            print("变更同步完成！")
+            return True
+
+        except Exception as e:
+            print(f"同步变更时出错: {str(e)}")
+            return False
+
+    def refresh_csv_and_baseline_after_sync(self, csv_file_path):
+        """同步完成后重新生成CSV和更新基线
+
+        这样可以看到改后的真实样子，也为下次比对做好准备
+
+        Args:
+            csv_file_path: 当前CSV文件路径
+        """
+        try:
+            # 从CSV文件名解析出Excel文件信息
+            csv_file = Path(csv_file_path)
+            csv_name = csv_file.stem  # 例如: "hero[hero]"
+
+            # 解析文件名和工作表名
+            if '[' in csv_name and ']' in csv_name:
+                excel_name = csv_name.split('[')[0]  # "hero"
+                sheet_name = csv_name.split('[')[1].rstrip(']')  # "hero"
+            else:
+                print(f"⚠️ 无法解析CSV文件名格式: {csv_name}")
+                return False
+
+            # 构建Excel文件路径
+            excel_file_path = Path(self.target_folder) / f"{excel_name}.xls"
+            if not excel_file_path.exists():
+                excel_file_path = Path(self.target_folder) / f"{excel_name}.xlsx"
+                if not excel_file_path.exists():
+                    print(f"⚠️ 找不到对应的Excel文件: {excel_name}.xls 或 {excel_name}.xlsx")
+                    return False
+
+            print(f"  重新生成CSV: {excel_file_path} → {csv_file_path}")
+
+            # 重新调用完整的转换流程（包含三步处理）
+            # 这样生成的CSV会包含注释，Excel是正式配置不带注释
+            command = f"{excel_name}[{sheet_name}]"
+            success = self.convert(command)
+            if not success:
+                print(f"  ❌ 重新生成CSV失败")
+                return False
+
+            # 更新基线文件
+            base_csv_path = self.base_folder / csv_file.name
+            base_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+            print(f"  更新基线: {csv_file_path} → {base_csv_path}")
+
+            # 复制当前CSV到基线文件夹
+            import shutil
+            shutil.copy2(csv_file_path, base_csv_path)
+
+            print(f"  ✅ CSV和基线更新完成")
+            return True
+
+        except Exception as e:
+            print(f"  ❌ 更新CSV和基线时出错: {str(e)}")
+            return False
+
+    def get_enhanced_changes_with_baseline(self, csv_file_path):
+        """获取增强的变更记录（包含数组位置和格式信息）
+
+        Returns:
+            list: 增强的变更记录列表，格式为 (row_num, col, old_item, new_item, arr_pos, arr_type)
+        """
+        try:
+            csv_path = Path(csv_file_path)
+            base_path = self.base_folder / csv_path.name
+
+            if not base_path.exists():
+                print("无基线备份，无法获取变更记录")
+                return []
+
+            # 读取当前与基线
+            df_curr = pd.read_csv(csv_path, encoding='utf-8-sig')
+            df_base = pd.read_csv(base_path, encoding='utf-8-sig')
+
+            # 统一为字符串比较，空值置空串
+            df_curr_n = df_curr.astype(str).fillna('')
+            df_base_n = df_base.astype(str).fillna('')
+
+            # 收集增强的变更记录
+            enhanced_changes = []
+            common_cols = [c for c in df_curr_n.columns if c in df_base_n.columns]
+            min_rows = min(len(df_curr_n), len(df_base_n))
+
+            # 比较公共行的数据变更
+            for i in range(min_rows):
+                for col in common_cols:
+                    v_old = df_base_n.iat[i, df_base_n.columns.get_loc(col)]
+                    v_new = df_curr_n.iat[i, df_curr_n.columns.get_loc(col)]
+                    if v_old != v_new:
+                        row_num = i + 2  # 行号+2(表头+索引)
+
+                        # 使用统一的差异比较工具
+                        diff_changes = self.compare_values_with_diff(v_old, v_new)
+                        if diff_changes:
+                            enhanced_changes.extend([
+                                (row_num, col, old_item, new_item, arr_pos, arr_type)
+                                for _, arr_pos, old_item, new_item, _, arr_type in diff_changes
+                            ])
+
+            return enhanced_changes
+
+        except Exception as e:
+            print(f"获取变更记录时出错: {str(e)}")
+            return []
+
+    def apply_data_changes_to_original_files(self, enhanced_changes, csv_file_path):
+        """将数据变更精确应用到原始Excel文件
+
+        Args:
+            enhanced_changes: 增强的变更记录列表
+            csv_file_path: CSV文件路径，用于确定目标Excel文件
+        """
+        if not enhanced_changes:
+            print("没有数据变更需要应用")
+            return True
+
+        # 解析CSV文件名获取目标Excel信息
+        csv_path = Path(csv_file_path)
+        csv_filename = csv_path.stem
+
+        if '[' not in csv_filename or ']' not in csv_filename:
+            print(f"CSV文件名格式错误: {csv_filename}")
+            return False
+
+        file_part, sheet_part = csv_filename.split('[', 1)
+        sheet_name = sheet_part.rstrip(']')
+        excel_filename = f"{file_part.strip()}.xls"
+
+        # 查找目标Excel文件
+        excel_file_path = self.find_excel_file(excel_filename)
+        if not excel_file_path:
+            print(f"未找到目标Excel文件: {excel_filename}")
+            return False
+
+        print(f"应用变更到: {excel_file_path.name}[{sheet_name}]")
+
+        # 按行列分组处理变更（同一个单元格的所有变更一起处理）
+        changes_by_cell = self._group_changes_by_cell(enhanced_changes)
+
+        success_count = 0
+        total_count = len(changes_by_cell)
+
+        # 处理每个单元格的变更
+        for (row_num, col), cell_changes in changes_by_cell.items():
+            print(f"  处理单元格 行{row_num} 列{col}: {len(cell_changes)} 个变更")
+
+            if self._apply_cell_changes_to_excel(
+                excel_file_path, sheet_name, row_num, col, cell_changes
+            ):
+                success_count += 1
+
+        print(f"数据同步完成: {success_count}/{total_count} 个单元格已更新")
+        return success_count == total_count
+
+    def _group_changes_by_cell(self, changes):
+        """按单元格分组变更"""
+        cell_groups = {}
+
+        for change in changes:
+            if len(change) >= 6:
+                row_num, col, old_item, new_item, arr_pos, arr_type = change
+                cell_key = (row_num, col)
+
+                if cell_key not in cell_groups:
+                    cell_groups[cell_key] = []
+
+                cell_groups[cell_key].append({
+                    'old_item': old_item,
+                    'new_item': new_item,
+                    'arr_pos': arr_pos,
+                    'arr_type': arr_type
+                })
+
+        return cell_groups
+
+    def _apply_cell_changes_to_excel(self, excel_file_path, sheet_name, row_num, col, cell_changes):
+        """将单元格的所有变更一次性应用到Excel文件"""
+        try:
+            # 导入go.py模块
+            import sys
+            sys.path.append(str(Path.cwd()))
+            from go import ExcelTextReplacer
+
+            # 创建替换器实例
+            replacer = ExcelTextReplacer({})
+
+            # 调用go.py的方法进行单元格级别的更新
+            return replacer.update_cell_with_multiple_changes(
+                str(excel_file_path), sheet_name, row_num, col, cell_changes
+            )
+
+        except Exception as e:
+            print(f"应用单元格变更时出错: {str(e)}")
+            return False
+
+    def _group_changes_by_type(self, changes):
+        """按变更类型分组"""
+        groups = {'新增': [], '删除': [], '替换': []}
+
+        for change in changes:
+            # 变更记录格式: (row_num, col, old_item, new_item, arr_pos, arr_type)
+            # 需要从变更记录中推断变更类型
+            if len(change) >= 4:
+                row_num, col, old_item, new_item, arr_pos, arr_type = change
+
+                if old_item and new_item:
+                    change_type = '替换'
+                elif new_item and not old_item:
+                    change_type = '新增'
+                elif old_item and not new_item:
+                    change_type = '删除'
+                else:
+                    continue  # 跳过无效变更
+
+                # 重新构造变更记录，包含推断的类型
+                enhanced_change = (row_num, col, old_item, new_item, arr_pos, arr_type)
+                groups[change_type].append(enhanced_change)
+
+        return {k: v for k, v in groups.items() if v}  # 只返回非空组
+
+    def _apply_single_change_to_excel(self, excel_file_path, sheet_name, row_num, col, new_value, arr_pos, arr_type, change_type):
+        """将单个变更应用到Excel文件
+
+        Args:
+            excel_file_path: Excel文件路径
+            sheet_name: 工作表名
+            row_num: 行号（1基索引，包含表头）
+            col: 列名
+            new_value: 新值
+            arr_pos: 数组位置
+            arr_type: 数组类型
+            change_type: 变更类型
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 导入go.py模块
+            import sys
+            sys.path.append(str(Path.cwd()))
+            from go import ExcelTextReplacer
+
+            # 创建替换器实例
+            replacer = ExcelTextReplacer({})
+
+            # 调用go.py的方法进行精确更新
+            return replacer.update_cell_value_precisely(
+                str(excel_file_path), sheet_name, row_num, col,
+                new_value, arr_pos, arr_type, change_type
+            )
+
+        except Exception as e:
+            print(f"应用变更时出错: {str(e)}")
+            return False
 
     def write_csv_to_excel(self, csv_file_path, excel_file_path, sheet_name):
         """将CSV文件内容写回到Excel文件的指定工作表"""
@@ -1067,12 +1453,21 @@ class ExcelToCSVConverter:
                         print(f"  错误: 未找到 {excel_filename}")
                         continue
 
-                    # 与基线比对
+                    # 第1步：找到差异
+                    print(f"  第1步: 分析变更差异...")
                     self.show_diff_with_baseline(csv_file)
 
-                    # 写入Excel
-                    self.write_csv_to_excel(csv_file, excel_file_path, sheet_name)
-                    print(f"  完成写入")
+                    # 第2步：智能同步变更到原文件
+                    print(f"  第2步: 智能同步变更...")
+                    sync_success = self.sync_changes_to_original_files(csv_file)
+
+                    if sync_success:
+                        print(f"  ✅ 智能同步完成")
+                    else:
+                        print(f"  ⚠️ 智能同步失败，使用传统方法...")
+                        # 如果智能同步失败，回退到传统方法
+                        self.write_csv_to_excel(csv_file, excel_file_path, sheet_name)
+                        print(f"  完成传统写入")
 
                     success_count += 1
 
