@@ -21,6 +21,10 @@ from datetime import datetime
 # 示例: TARGET_FOLDER = r"E:\qyn_game\parseFiles\global\config\test\lang_client"
 TARGET_FOLDER = r"E:\qyn_game\parseFiles\global\config\test\lang_client"
 
+# 第二步配置表搜索的目标文件夹（用于 findRef 模式）
+# 示例: TARGET_FOLDER2 = r"E:\qyn_game\parseFiles\global\config\test"
+TARGET_FOLDER2 = r"E:\qyn_game\parseFiles\global\config\test"
+
 # 在这里配置你需要的替换规则
 REPLACEMENT_CONFIG = {
     "人才":"能士",
@@ -57,7 +61,7 @@ class ExcelTextReplacer:
         self.replacement_details = {}
         self.detailed_replacements = []  # 存储详细的替换信息
         self.search_results = []  # 存储搜索结果
-        
+
     def replace_text_in_cell(self, cell_value, file_name, sheet_name, row_idx, col_idx, id_value=""):
         """在单元格文本中进行替换，并记录详细信息"""
         # 统一转换为字符串处理，避免数字类型问题
@@ -156,14 +160,14 @@ class ExcelTextReplacer:
                 strike=source_cell.font.strike,
                 color=source_cell.font.color
             )
-        
+
         if source_cell.fill:
             target_cell.fill = PatternFill(
                 fill_type=source_cell.fill.fill_type,
                 start_color=source_cell.fill.start_color,
                 end_color=source_cell.fill.end_color
             )
-        
+
         if source_cell.border:
             target_cell.border = Border(
                 left=source_cell.border.left,
@@ -171,7 +175,7 @@ class ExcelTextReplacer:
                 top=source_cell.border.top,
                 bottom=source_cell.border.bottom
             )
-        
+
         if source_cell.alignment:
             target_cell.alignment = Alignment(
                 horizontal=source_cell.alignment.horizontal,
@@ -181,7 +185,7 @@ class ExcelTextReplacer:
                 shrink_to_fit=source_cell.alignment.shrink_to_fit,
                 indent=source_cell.alignment.indent
             )
-    
+
     def process_excel_file(self, file_path):
         """处理单个Excel文件"""
         print(f"正在处理文件: {file_path}")
@@ -328,19 +332,19 @@ class ExcelTextReplacer:
             return False
 
         return True
-    
+
     def find_excel_files(self, directory):
         """查找目录中的Excel文件"""
         excel_files = []
         directory_path = Path(directory)
-        
+
         if directory_path.is_file():
             if directory_path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 excel_files.append(directory_path)
         else:
             for ext in SUPPORTED_EXTENSIONS:
                 excel_files.extend(directory_path.glob(f"*{ext}"))
-        
+
         return excel_files
 
     def search_in_excel_files(self, search_text, directory):
@@ -1578,10 +1582,111 @@ class ExcelTextReplacer:
                 if row_idx < sheet.nrows and sheet.ncols > 0:
                     id_value = sheet.cell_value(row_idx, 0)
                     return str(id_value) if id_value else ""
-        except:
+        except Exception:
             pass
 
         return ""
+
+
+    def search_value_usage_in_excel_files(self, search_value, directory):
+        """                                """
+        excel_files = self.find_excel_files(directory)
+
+        if not excel_files:
+            print(f"在路径 '{directory}' 中未找到Excel文件")
+            return
+
+
+        print(f"在 {len(excel_files)} 个Excel文件中查找引用: '{search_value}'")
+        print("="*60)
+
+        total_matches = 0
+
+        for file_path in excel_files:
+            total_matches += self._search_value_usage_in_single_file(search_value, file_path)
+
+        if total_matches == 0:
+            print(f"\n未找到包含 '{search_value}' 的单元格")
+        else:
+            print(f"\n共找到 {total_matches} 处引用")
+
+    def _search_value_usage_in_single_file(self, search_value, file_path):
+        """        """
+        file_path_obj = Path(file_path)
+        file_extension = file_path_obj.suffix.lower()
+
+        if file_extension == '.xlsx':
+            return self._search_value_usage_in_xlsx(search_value, file_path)
+        elif file_extension == '.xls':
+            return self._search_value_usage_in_xls(search_value, file_path)
+        else:
+            return 0
+
+    def _search_value_usage_in_xlsx(self, search_value, file_path):
+        """        """
+        match_count = 0
+        try:
+            workbook = openpyxl.load_workbook(file_path, read_only=True)
+            file_name = Path(file_path).name
+
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+
+                for row_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if row is None:
+                        continue
+
+                    row_id = ""
+                    if len(row) > 0 and row[0] is not None:
+                        row_id = str(row[0])
+
+                    for col_idx, cell_value in enumerate(row):
+                        if cell_value is None:
+                            continue
+
+                        cell_str = str(cell_value)
+                        if search_value in cell_str:
+                            match_count += 1
+                            print(f"{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+
+            workbook.close()
+        except Exception as e:
+            print(f"搜索文件 {file_path} 时出错: {str(e)}")
+
+        return match_count
+
+    def _search_value_usage_in_xls(self, search_value, file_path):
+        """        """
+        match_count = 0
+        try:
+            workbook = xlrd.open_workbook(file_path)
+            file_name = Path(file_path).name
+
+            for sheet_index in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_index)
+                sheet_name = sheet.name
+
+                for row_idx in range(sheet.nrows):
+                    row_id = ""
+                    if sheet.ncols > 0:
+                        id_cell_value = sheet.cell_value(row_idx, 0)
+                        if id_cell_value not in ("", None):
+                            row_id = str(id_cell_value)
+
+                    for col_idx in range(sheet.ncols):
+                        cell_value = sheet.cell_value(row_idx, col_idx)
+                        if cell_value in ("", None):
+                            continue
+
+                        cell_str = str(cell_value)
+                        if search_value in cell_str:
+                            match_count += 1
+                            print(f"{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+        except Exception as e:
+            print(f"搜索文件 {file_path} 时出错: {str(e)}")
+
+        return match_count
+
 
     def print_summary(self):
         """打印处理总结"""
@@ -1624,6 +1729,27 @@ class ExcelTextReplacer:
 def main():
     # 创建替换器实例
     replacer = ExcelTextReplacer(REPLACEMENT_CONFIG)
+
+    # findRef 模式：在配置表中查找某个值被哪些表/行引用
+    args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == "findRef":
+        search_value = args[1]
+
+        # 确定引用搜索路径：优先使用 TARGET_FOLDER2，其次命令行参数，最后当前目录
+        if len(args) >= 3:
+            ref_path = args[2]
+        elif TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+            ref_path = TARGET_FOLDER2
+        else:
+            ref_path = "."
+
+        print("Excel 引用搜索工具（findRef 模式）")
+        print("=" * 40)
+        print(f"搜索文本: {search_value}")
+        print(f"搜索路径: {ref_path}")
+        replacer.search_value_usage_in_excel_files(search_value, ref_path)
+        return
+
 
     # 确定工作路径：优先使用配置的目标文件夹
     if TARGET_FOLDER and TARGET_FOLDER.strip():
