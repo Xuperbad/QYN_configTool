@@ -383,21 +383,29 @@ class ExcelTextReplacer:
             seen_ids = set()
             has_id_without_target_folder2 = False
 
+            # 为每个结果块添加序号，提升终端可读性
+            index = 0
+
             for result in self.search_results:
                 row_key = f"{result['file']}_{result['sheet']}_{result['row']}"
 
                 if row_key not in processed_rows:
                     processed_rows.add(row_key)
+                    index += 1
+
+                    # 块之间增加一个空行，便于在终端中分块阅读
+                    if index > 1:
+                        print()
 
                     # 获取ID和中文内容
                     id_content = result['id'] if result['id'] else ""
                     chinese_content = result.get('chinese_content', "")
 
-                    # 输出格式：文件名[工作表名], 行X: ID, 中文内容
+                    # 输出格式：[序号] 文件名[工作表名], 行X: ID, 中文内容
                     if chinese_content:
-                        print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}, {chinese_content}")
+                        print(f"[{index}] {result['file']}[{result['sheet']}], 行{result['row']}: {id_content}, {chinese_content}")
                     else:
-                        print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}")
+                        print(f"[{index}] {result['file']}[{result['sheet']}], 行{result['row']}: {id_content}")
 
                     # 在该行下方输出基于 ID 的反向引用结果
                     id_value = result.get('id')
