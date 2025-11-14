@@ -9,7 +9,7 @@ py go.py
 py go.py t_hero_getway*
 # 在语言表中查找（精确/模糊）
 
-py go.py findRef monthCard
+py go.py findRef monthCard.mName
 # 在配置表中查找
 
 """
@@ -379,6 +379,10 @@ class ExcelTextReplacer:
             # 按文件和行分组，避免重复显示同一行的不同列
             processed_rows = set()
 
+            # 收集唯一 ID，用于后续反向引用搜索
+            unique_ids = []
+            seen_ids = set()
+
             for result in self.search_results:
                 row_key = f"{result['file']}_{result['sheet']}_{result['row']}"
 
@@ -394,6 +398,21 @@ class ExcelTextReplacer:
                         print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}, {chinese_content}")
                     else:
                         print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}")
+
+                # 收集唯一 ID
+                id_value = result.get('id')
+                if id_value and id_value not in seen_ids:
+                    seen_ids.add(id_value)
+                    unique_ids.append(id_value)
+
+            # 基于匹配到的 ID，在配置表中做反向引用查找
+            if unique_ids and TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+                for id_value in unique_ids:
+                    # 只打印具体引用行，不打印额外的统计/标题
+                    self.search_value_usage_in_excel_files(id_value, TARGET_FOLDER2, indent="   ", show_header=False)
+            elif unique_ids:
+                # 没有配置 TARGET_FOLDER2 时给出提示，但不报错
+                print("\n未配置 TARGET_FOLDER2，跳过反向引用查找")
         else:
             print(f"\n未找到包含 '{search_text}' 的内容")
 
@@ -1597,42 +1616,44 @@ class ExcelTextReplacer:
         return ""
 
 
-    def search_value_usage_in_excel_files(self, search_value, directory):
-        """                                """
+    def search_value_usage_in_excel_files(self, search_value, directory, indent="", show_header=True):
+        """在指定目录的所有 Excel 文件中搜索包含指定值的单元格"""
         excel_files = self.find_excel_files(directory)
 
         if not excel_files:
-            print(f"在路径 '{directory}' 中未找到Excel文件")
+            if show_header:
+                print(f"{indent}在路径 '{directory}' 中未找到Excel文件")
             return
 
-
-        print(f"在 {len(excel_files)} 个Excel文件中查找引用: '{search_value}'")
-        print("="*60)
+        if show_header:
+            print(f"{indent}在 {len(excel_files)} 个Excel文件中查找引用: '{search_value}'")
+            print(f"{indent}" + "=" * 60)
 
         total_matches = 0
 
         for file_path in excel_files:
-            total_matches += self._search_value_usage_in_single_file(search_value, file_path)
+            total_matches += self._search_value_usage_in_single_file(search_value, file_path, indent)
 
-        if total_matches == 0:
-            print(f"\n未找到包含 '{search_value}' 的单元格")
-        else:
-            print(f"\n共找到 {total_matches} 处引用")
+        if show_header:
+            if total_matches == 0:
+                print(f"\n{indent}未找到包含 '{search_value}' 的单元格")
+            else:
+                print(f"\n{indent}共找到 {total_matches} 处引用")
 
-    def _search_value_usage_in_single_file(self, search_value, file_path):
-        """        """
+    def _search_value_usage_in_single_file(self, search_value, file_path, indent=""):
+        """根据文件类型调用相应的搜索方法"""
         file_path_obj = Path(file_path)
         file_extension = file_path_obj.suffix.lower()
 
         if file_extension == '.xlsx':
-            return self._search_value_usage_in_xlsx(search_value, file_path)
+            return self._search_value_usage_in_xlsx(search_value, file_path, indent)
         elif file_extension == '.xls':
-            return self._search_value_usage_in_xls(search_value, file_path)
+            return self._search_value_usage_in_xls(search_value, file_path, indent)
         else:
             return 0
 
-    def _search_value_usage_in_xlsx(self, search_value, file_path):
-        """        """
+    def _search_value_usage_in_xlsx(self, search_value, file_path, indent=""):
+        """在 .xlsx 文件的所有单元格中搜索指定值"""
         match_count = 0
         try:
             workbook = openpyxl.load_workbook(file_path, read_only=True)
@@ -1656,16 +1677,16 @@ class ExcelTextReplacer:
                         cell_str = str(cell_value)
                         if search_value in cell_str:
                             match_count += 1
-                            print(f"{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+                            print(f"{indent}{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
 
             workbook.close()
         except Exception as e:
-            print(f"搜索文件 {file_path} 时出错: {str(e)}")
+            print(f"{indent}搜索文件 {file_path} 时出错: {str(e)}")
 
         return match_count
 
-    def _search_value_usage_in_xls(self, search_value, file_path):
-        """        """
+    def _search_value_usage_in_xls(self, search_value, file_path, indent=""):
+        """在 .xls 文件的所有单元格中搜索指定值"""
         match_count = 0
         try:
             workbook = xlrd.open_workbook(file_path)
@@ -1690,9 +1711,9 @@ class ExcelTextReplacer:
                         cell_str = str(cell_value)
                         if search_value in cell_str:
                             match_count += 1
-                            print(f"{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+                            print(f"{indent}{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
         except Exception as e:
-            print(f"搜索文件 {file_path} 时出错: {str(e)}")
+            print(f"{indent}搜索文件 {file_path} 时出错: {str(e)}")
 
         return match_count
 
@@ -1763,7 +1784,6 @@ def main():
     # 确定工作路径：优先使用配置的目标文件夹
     if TARGET_FOLDER and TARGET_FOLDER.strip():
         work_path = TARGET_FOLDER
-        print(f"使用配置的目标文件夹: {work_path}")
     else:
         # 简单的命令行参数处理
         if len(sys.argv) >= 2:
@@ -1780,7 +1800,9 @@ def main():
                 print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
                 print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
                 print("="*40)
-                print(f"搜索路径: {work_path}")
+                print(f"语言表路径: {work_path}")
+                if TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+                    print(f"配置表路径: {TARGET_FOLDER2}")
                 replacer.search_in_excel_files(search_text, work_path)
                 return
             else:
@@ -1803,7 +1825,9 @@ def main():
             print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
             print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
             print("="*40)
-            print(f"搜索路径: {work_path}")
+            print(f"语言表路径: {work_path}")
+            if TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+                print(f"配置表路径: {TARGET_FOLDER2}")
             replacer.search_in_excel_files(search_text, work_path)
             return
 
