@@ -147,11 +147,18 @@ class ExcelTextReplacer:
         return False
 
     def is_text_match(self, text, search_text):
-        """检查文本是否匹配搜索条件（支持模糊搜索）"""
+        """检查文本是否匹配搜索条件（仅支持：末尾 * 的包含模糊）"""
+        if not isinstance(text, str):
+            text = str(text)
+
+        # 规则：
+        #   五竹* -> 模糊搜索（包含匹配），等价于 text 中包含 "五竹"
+        #   其它  -> 精确匹配
         if search_text.endswith('*'):
-            # 模糊搜索：前缀匹配
-            prefix = search_text[:-1]  # 去掉末尾的 *
-            return text.startswith(prefix)
+            keyword = search_text[:-1]  # 去掉末尾的 *
+            if keyword == "":
+                return False
+            return keyword in text
         else:
             # 精确搜索：完全匹配（而不是包含匹配）
             return text == search_text
@@ -364,7 +371,11 @@ class ExcelTextReplacer:
             print(f"在路径 '{directory}' 中未找到Excel文件")
             return
 
-        search_type = "模糊搜索" if search_text.endswith('*') else "精确搜索"
+        # 根据是否以 * 结尾，确定搜索类型文案
+        if search_text.endswith('*'):
+            search_type = "模糊搜索（包含匹配）"
+        else:
+            search_type = "精确搜索"
         print(f"在 {len(excel_files)} 个Excel文件中{search_type}: '{search_text}'")
         print("="*60)
 
@@ -1807,8 +1818,8 @@ def main():
                 work_path = sys.argv[2] if len(sys.argv) >= 3 else '.'
                 print("Excel文本搜索工具")
                 print("="*40)
-                print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
-                print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
+                print("支持模糊搜索：在搜索文本末尾添加 * 号进行包含匹配")
+                print("例如：'五竹*' 可搜索所有包含 '五竹' 的文本")
                 print("="*40)
                 print(f"语言表路径: {work_path}")
                 if TARGET_FOLDER2 and TARGET_FOLDER2.strip():
@@ -1832,8 +1843,8 @@ def main():
             search_text = first_arg.strip('"')
             print("Excel文本搜索工具")
             print("="*40)
-            print("支持模糊搜索：在搜索文本末尾添加 * 号进行前缀匹配")
-            print("例如：'t_hero_getway*' 可搜索所有以 t_hero_getway 开头的文本")
+            print("支持模糊搜索：在搜索文本末尾添加 * 号进行包含匹配")
+            print("例如：'五竹*' 可搜索所有包含 '五竹' 的文本")
             print("="*40)
             print(f"语言表路径: {work_path}")
             if TARGET_FOLDER2 and TARGET_FOLDER2.strip():
