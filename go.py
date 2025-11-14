@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Excel文本替换工具
-用于批量替换Excel文件中的文本内容，保持原有格式不变
+Excel 文本处理/替换/搜索工具
+
+py go.py
+# 替换文本：TARGET_FOLDER
+
+py go.py t_hero_getway*
+# 在语言表中查找（精确/模糊）
+
+py go.py findRef monthCard
+# 在配置表中查找
+
 """
 
 import os
