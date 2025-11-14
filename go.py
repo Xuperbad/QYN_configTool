@@ -379,9 +379,9 @@ class ExcelTextReplacer:
             # 按文件和行分组，避免重复显示同一行的不同列
             processed_rows = set()
 
-            # 收集唯一 ID，用于后续反向引用搜索
-            unique_ids = []
+            # 记录已经做过反向引用查找的 ID，避免重复打印
             seen_ids = set()
+            has_id_without_target_folder2 = False
 
             for result in self.search_results:
                 row_key = f"{result['file']}_{result['sheet']}_{result['row']}"
@@ -399,19 +399,19 @@ class ExcelTextReplacer:
                     else:
                         print(f"{result['file']}[{result['sheet']}], 行{result['row']}: {id_content}")
 
-                # 收集唯一 ID
-                id_value = result.get('id')
-                if id_value and id_value not in seen_ids:
-                    seen_ids.add(id_value)
-                    unique_ids.append(id_value)
+                    # 在该行下方输出基于 ID 的反向引用结果
+                    id_value = result.get('id')
+                    if id_value:
+                        if TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+                            if id_value not in seen_ids:
+                                seen_ids.add(id_value)
+                                # 只打印具体引用行，不打印额外的统计/标题
+                                self.search_value_usage_in_excel_files(id_value, TARGET_FOLDER2, indent="   ", show_header=False)
+                        else:
+                            has_id_without_target_folder2 = True
 
-            # 基于匹配到的 ID，在配置表中做反向引用查找
-            if unique_ids and TARGET_FOLDER2 and TARGET_FOLDER2.strip():
-                for id_value in unique_ids:
-                    # 只打印具体引用行，不打印额外的统计/标题
-                    self.search_value_usage_in_excel_files(id_value, TARGET_FOLDER2, indent="   ", show_header=False)
-            elif unique_ids:
-                # 没有配置 TARGET_FOLDER2 时给出提示，但不报错
+            # 如果有需要做反向引用但未配置 TARGET_FOLDER2，则提示一次
+            if has_id_without_target_folder2:
                 print("\n未配置 TARGET_FOLDER2，跳过反向引用查找")
         else:
             print(f"\n未找到包含 '{search_text}' 的内容")
@@ -1653,7 +1653,7 @@ class ExcelTextReplacer:
             return 0
 
     def _search_value_usage_in_xlsx(self, search_value, file_path, indent=""):
-        """在 .xlsx 文件的所有单元格中搜索指定值"""
+        """在 .xlsx 文件的所有单元格中搜索指定值（精简输出：只显示文件/Sheet/行）"""
         match_count = 0
         try:
             workbook = openpyxl.load_workbook(file_path, read_only=True)
@@ -1666,18 +1666,20 @@ class ExcelTextReplacer:
                     if row is None:
                         continue
 
-                    row_id = ""
-                    if len(row) > 0 and row[0] is not None:
-                        row_id = str(row[0])
+                    has_match = False
 
-                    for col_idx, cell_value in enumerate(row):
+                    for cell_value in row:
                         if cell_value is None:
                             continue
-
                         cell_str = str(cell_value)
                         if search_value in cell_str:
-                            match_count += 1
-                            print(f"{indent}{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+                            has_match = True
+                            break
+
+                    if has_match:
+                        match_count += 1
+                        # 精简模式：只输出 文件名+Sheet名+行号
+                        print(f"{indent}| {file_name}[{sheet_name}] 行{row_idx + 1}")
 
             workbook.close()
         except Exception as e:
@@ -1686,7 +1688,7 @@ class ExcelTextReplacer:
         return match_count
 
     def _search_value_usage_in_xls(self, search_value, file_path, indent=""):
-        """在 .xls 文件的所有单元格中搜索指定值"""
+        """在 .xls 文件的所有单元格中搜索指定值（精简输出：只显示文件/Sheet/行）"""
         match_count = 0
         try:
             workbook = xlrd.open_workbook(file_path)
@@ -1697,21 +1699,21 @@ class ExcelTextReplacer:
                 sheet_name = sheet.name
 
                 for row_idx in range(sheet.nrows):
-                    row_id = ""
-                    if sheet.ncols > 0:
-                        id_cell_value = sheet.cell_value(row_idx, 0)
-                        if id_cell_value not in ("", None):
-                            row_id = str(id_cell_value)
+                    has_match = False
 
                     for col_idx in range(sheet.ncols):
                         cell_value = sheet.cell_value(row_idx, col_idx)
                         if cell_value in ("", None):
                             continue
-
                         cell_str = str(cell_value)
                         if search_value in cell_str:
-                            match_count += 1
-                            print(f"{indent}{file_name}[{sheet_name}] 行{row_idx + 1} 列{col_idx + 1}: ID={row_id}, 值={cell_str}")
+                            has_match = True
+                            break
+
+                    if has_match:
+                        match_count += 1
+                        # 精简模式：只输出 文件名+Sheet名+行号
+                        print(f"{indent}| {file_name}[{sheet_name}] 行{row_idx + 1}")
         except Exception as e:
             print(f"{indent}搜索文件 {file_path} 时出错: {str(e)}")
 
