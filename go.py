@@ -10,7 +10,16 @@ py go.py t_hero_getway*
 # 在语言表中查找（精确/模糊）
 
 py go.py findRef monthCard.mName
-# 在配置表中查找
+# 在配置表中查找单个引用
+
+py go.py batchFindRef
+# 批量查找引用（从input.md读取ID列表，输出到output.md）
+
+py go.py batchFindRef input.md output.md
+# 批量查找引用（指定输入输出文件）
+
+py go.py batchFindRef input.md output.md E:\\path\\to\\config
+# 批量查找引用（指定输入输出文件和搜索路径）
 
 """
 
@@ -1642,7 +1651,7 @@ class ExcelTextReplacer:
         if not excel_files:
             if show_header:
                 print(f"{indent}在路径 '{directory}' 中未找到Excel文件")
-            return
+            return 0
 
         if show_header:
             print(f"{indent}在 {len(excel_files)} 个Excel文件中查找引用: '{search_value}'")
@@ -1658,6 +1667,8 @@ class ExcelTextReplacer:
                 print(f"\n{indent}未找到包含 '{search_value}' 的单元格")
             else:
                 print(f"\n{indent}共找到 {total_matches} 处引用")
+
+        return total_matches
 
     def _search_value_usage_in_single_file(self, search_value, file_path, indent=""):
         """根据文件类型调用相应的搜索方法"""
@@ -1738,6 +1749,294 @@ class ExcelTextReplacer:
 
         return match_count
 
+    def batch_search_from_file(self, input_file, output_file, directory):
+        """批量查找功能：从input文件读取ID列表，查找每个ID的引用，并输出到output文件
+
+        Args:
+            input_file: 输入文件路径（包含要查找的ID列表）
+            output_file: 输出文件路径（Markdown格式）
+            directory: 要搜索的目录
+        """
+        # 读取输入文件
+        try:
+            with open(input_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except Exception as e:
+            print(f"读取输入文件失败: {str(e)}")
+            return
+
+        # 提取所有ID（去除空行和空白字符）
+        item_ids = []
+        for line in lines:
+            item_id = line.strip()
+            if item_id:  # 跳过空行
+                item_ids.append(item_id)
+
+        if not item_ids:
+            print("输入文件中没有找到任何ID")
+            return
+
+        print(f"从 {input_file} 读取到 {len(item_ids)} 个道具ID")
+        print(f"开始批量查找...")
+        print("=" * 80)
+
+        # 存储所有结果
+        results = []
+
+        # 逐个查找
+        for idx, item_id in enumerate(item_ids, 1):
+            print(f"\n[{idx}/{len(item_ids)}] 正在查找: {item_id}")
+
+            # 收集该ID的引用信息
+            matches = self._collect_value_usage(item_id, directory)
+
+            results.append({
+                'id': item_id,
+                'match_count': len(matches),
+                'matches': matches
+            })
+
+            print(f"  找到 {len(matches)} 处引用")
+
+        # 生成Markdown报告
+        self._generate_markdown_report(results, output_file, input_file, directory)
+
+        print("\n" + "=" * 80)
+        print(f"批量查找完成！结果已保存到: {output_file}")
+        print("=" * 80)
+
+    def _collect_value_usage(self, search_value, directory):
+        """收集指定值的所有引用信息（不打印，只返回结果）
+
+        Returns:
+            list: 包含所有匹配信息的列表，每项为 {'file': ..., 'sheet': ..., 'row': ...}
+        """
+        excel_files = self.find_excel_files(directory)
+        matches = []
+
+        for file_path in excel_files:
+            file_matches = self._collect_value_usage_in_single_file(search_value, file_path)
+            matches.extend(file_matches)
+
+        return matches
+
+    def _collect_value_usage_in_single_file(self, search_value, file_path):
+        """在单个文件中收集引用信息"""
+        file_path_obj = Path(file_path)
+        file_extension = file_path_obj.suffix.lower()
+
+        if file_extension == '.xlsx':
+            return self._collect_value_usage_in_xlsx(search_value, file_path)
+        elif file_extension == '.xls':
+            return self._collect_value_usage_in_xls(search_value, file_path)
+        else:
+            return []
+
+    def _collect_value_usage_in_xlsx(self, search_value, file_path):
+        """在.xlsx文件中收集引用信息"""
+        matches = []
+        try:
+            workbook = openpyxl.load_workbook(file_path, read_only=True)
+            file_name = Path(file_path).name
+
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+
+                for row_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if row is None:
+                        continue
+
+                    has_match = False
+
+                    for cell_value in row:
+                        if cell_value is None:
+                            continue
+                        cell_str = str(cell_value)
+                        if search_value in cell_str:
+                            has_match = True
+                            break
+
+                    if has_match:
+                        matches.append({
+                            'file': file_name,
+                            'sheet': sheet_name,
+                            'row': row_idx + 1
+                        })
+
+            workbook.close()
+        except Exception as e:
+            pass  # 静默处理错误
+
+        return matches
+
+    def _collect_value_usage_in_xls(self, search_value, file_path):
+        """在.xls文件中收集引用信息"""
+        matches = []
+        try:
+            workbook = xlrd.open_workbook(file_path)
+            file_name = Path(file_path).name
+
+            for sheet_index in range(workbook.nsheets):
+                sheet = workbook.sheet_by_index(sheet_index)
+                sheet_name = sheet.name
+
+                for row_idx in range(sheet.nrows):
+                    has_match = False
+
+                    for col_idx in range(sheet.ncols):
+                        cell_value = sheet.cell_value(row_idx, col_idx)
+                        if cell_value in ("", None):
+                            continue
+                        cell_str = str(cell_value)
+                        if search_value in cell_str:
+                            has_match = True
+                            break
+
+                    if has_match:
+                        matches.append({
+                            'file': file_name,
+                            'sheet': sheet_name,
+                            'row': row_idx + 1
+                        })
+        except Exception as e:
+            pass  # 静默处理错误
+
+        return matches
+
+    def _generate_markdown_report(self, results, output_file, input_file, directory):
+        """生成Markdown格式的报告
+
+        Args:
+            results: 查找结果列表
+            output_file: 输出文件路径
+            input_file: 输入文件路径
+            directory: 搜索目录
+        """
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                # 写入标题和概览
+                f.write("# 道具引用查找报告\n\n")
+                f.write(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write(f"**输入文件**: `{input_file}`\n\n")
+                f.write(f"**搜索目录**: `{directory}`\n\n")
+                f.write(f"**查找道具数量**: {len(results)}\n\n")
+
+                # 统计信息
+                total_refs = sum(r['match_count'] for r in results)
+                no_ref_items = [r for r in results if r['match_count'] == 0]
+                low_ref_items = [r for r in results if 0 < r['match_count'] <= 3]
+
+                f.write("---\n\n")
+                f.write("## 📊 统计概览\n\n")
+                f.write(f"- **总引用次数**: {total_refs}\n")
+                f.write(f"- **无引用道具**: {len(no_ref_items)} 个\n")
+                f.write(f"- **低引用道具** (1-3次): {len(low_ref_items)} 个\n")
+                f.write(f"- **平均引用次数**: {total_refs / len(results):.2f}\n\n")
+
+                # 无引用道具列表（可能已废弃）
+                if no_ref_items:
+                    f.write("---\n\n")
+                    f.write("## ⚠️ 无引用道具（可能已废弃）\n\n")
+                    f.write("以下道具在配置文件中未找到任何引用，可能已经废弃：\n\n")
+                    for item in no_ref_items:
+                        f.write(f"- `{item['id']}`\n")
+                    f.write("\n")
+
+                # 低引用道具列表
+                if low_ref_items:
+                    f.write("---\n\n")
+                    f.write("## 🔍 低引用道具（1-3次引用）\n\n")
+                    f.write("以下道具引用次数较少，可能需要关注：\n\n")
+                    f.write("| 道具ID | 引用次数 |\n")
+                    f.write("|--------|----------|\n")
+                    for item in sorted(low_ref_items, key=lambda x: x['match_count']):
+                        f.write(f"| `{item['id']}` | {item['match_count']} |\n")
+                    f.write("\n")
+
+                # 详细引用信息
+                f.write("---\n\n")
+                f.write("## 📋 详细引用信息\n\n")
+
+                # 按引用次数排序（从少到多）
+                sorted_results = sorted(results, key=lambda x: x['match_count'])
+
+                for result in sorted_results:
+                    item_id = result['id']
+                    match_count = result['match_count']
+                    matches = result['matches']
+
+                    # 根据引用次数添加不同的标记
+                    if match_count == 0:
+                        status_icon = "❌"
+                        status_text = "无引用"
+                    elif match_count <= 3:
+                        status_icon = "⚠️"
+                        status_text = f"{match_count}次引用"
+                    else:
+                        status_icon = "✅"
+                        status_text = f"{match_count}次引用"
+
+                    f.write(f"### {status_icon} `{item_id}` - {status_text}\n\n")
+
+                    if match_count == 0:
+                        f.write("*未找到任何引用*\n\n")
+                    else:
+                        # 按文件分组显示
+                        file_groups = {}
+                        for match in matches:
+                            file_key = f"{match['file']}[{match['sheet']}]"
+                            if file_key not in file_groups:
+                                file_groups[file_key] = []
+                            file_groups[file_key].append(match['row'])
+
+                        for file_key, rows in sorted(file_groups.items()):
+                            # 将行号排序并合并连续的行
+                            rows_sorted = sorted(rows)
+                            row_ranges = self._format_row_ranges(rows_sorted)
+                            f.write(f"- **{file_key}**: 行 {row_ranges}\n")
+
+                        f.write("\n")
+
+                # 页脚
+                f.write("---\n\n")
+                f.write("*报告生成完成*\n")
+
+            print(f"\n✅ Markdown报告已生成: {output_file}")
+
+        except Exception as e:
+            print(f"生成Markdown报告失败: {str(e)}")
+
+    def _format_row_ranges(self, rows):
+        """将行号列表格式化为范围字符串
+
+        例如: [1, 2, 3, 5, 7, 8, 9] -> "1-3, 5, 7-9"
+        """
+        if not rows:
+            return ""
+
+        ranges = []
+        start = rows[0]
+        end = rows[0]
+
+        for i in range(1, len(rows)):
+            if rows[i] == end + 1:
+                end = rows[i]
+            else:
+                if start == end:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{end}")
+                start = rows[i]
+                end = rows[i]
+
+        # 添加最后一个范围
+        if start == end:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{end}")
+
+        return ", ".join(ranges)
+
 
     def print_summary(self):
         """打印处理总结"""
@@ -1781,8 +2080,33 @@ def main():
     # 创建替换器实例
     replacer = ExcelTextReplacer(REPLACEMENT_CONFIG)
 
-    # findRef 模式：在配置表中查找某个值被哪些表/行引用
     args = sys.argv[1:]
+
+    # batchFindRef 模式：批量查找引用
+    if len(args) >= 1 and args[0] == "batchFindRef":
+        # 默认使用 input.md 和 output.md
+        input_file = args[1] if len(args) >= 2 else "input.md"
+        output_file = args[2] if len(args) >= 3 else "output.md"
+
+        # 确定搜索路径
+        if len(args) >= 4:
+            ref_path = args[3]
+        elif TARGET_FOLDER2 and TARGET_FOLDER2.strip():
+            ref_path = TARGET_FOLDER2
+        else:
+            ref_path = "."
+
+        print("Excel 批量引用搜索工具（batchFindRef 模式）")
+        print("=" * 80)
+        print(f"输入文件: {input_file}")
+        print(f"输出文件: {output_file}")
+        print(f"搜索路径: {ref_path}")
+        print("=" * 80)
+
+        replacer.batch_search_from_file(input_file, output_file, ref_path)
+        return
+
+    # findRef 模式：在配置表中查找某个值被哪些表/行引用
     if len(args) >= 2 and args[0] == "findRef":
         search_value = args[1]
 
