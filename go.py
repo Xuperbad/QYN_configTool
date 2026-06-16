@@ -405,6 +405,7 @@ class ExcelTextReplacer:
 
             # 为每个结果块添加序号，提升终端可读性
             index = 0
+            displayed_results = []
 
             for result in self.search_results:
                 row_key = f"{result['file']}_{result['sheet']}_{result['row']}"
@@ -412,6 +413,7 @@ class ExcelTextReplacer:
                 if row_key not in processed_rows:
                     processed_rows.add(row_key)
                     index += 1
+                    displayed_results.append(result)
 
                     # 块之间增加一个空行，便于在终端中分块阅读
                     if index > 1:
@@ -441,8 +443,52 @@ class ExcelTextReplacer:
             # 如果有需要做反向引用但未配置 TARGET_FOLDER2，则提示一次
             if has_id_without_target_folder2:
                 print("\n未配置 TARGET_FOLDER2，跳过反向引用查找")
+
+            self.prompt_open_search_result(displayed_results)
         else:
             print(f"\n未找到包含 '{search_text}' 的内容")
+
+    def prompt_open_search_result(self, displayed_results):
+        """交互式选择搜索结果，并打开对应的Excel文件"""
+        if not displayed_results or not sys.stdin.isatty():
+            return
+
+        while True:
+            try:
+                choice = input("\n输入结果序号打开对应Excel（直接回车退出）：").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+
+            if not choice:
+                return
+
+            if not choice.isdigit():
+                print("请输入数字序号。")
+                continue
+
+            index = int(choice)
+            if index < 1 or index > len(displayed_results):
+                print(f"序号范围应为 1-{len(displayed_results)}。")
+                continue
+
+            self.open_excel_file(displayed_results[index - 1])
+            return
+
+    def open_excel_file(self, result):
+        """用系统默认程序打开搜索结果对应的Excel文件"""
+        file_path = Path(result.get('path') or result.get('file', ''))
+        if not file_path.exists():
+            print(f"文件不存在，无法打开: {file_path}")
+            return False
+
+        try:
+            os.startfile(str(file_path))
+            print(f"已打开: {file_path}")
+            return True
+        except Exception as e:
+            print(f"打开文件失败: {file_path}，原因: {str(e)}")
+            return False
 
     def search_in_single_file(self, search_text, file_path):
         """在单个Excel文件中搜索"""
@@ -494,6 +540,7 @@ class ExcelTextReplacer:
                         # 添加搜索结果，包含完整的行信息
                         self.search_results.append({
                             'file': file_name,
+                            'path': str(Path(file_path).resolve()),
                             'sheet': sheet_name,
                             'row': row_idx + 1,
                             'col': matched_col,
@@ -555,6 +602,7 @@ class ExcelTextReplacer:
                         # 添加搜索结果，包含完整的行信息
                         self.search_results.append({
                             'file': file_name,
+                            'path': str(Path(file_path).resolve()),
                             'sheet': sheet_name,
                             'row': row_idx + 1,
                             'col': matched_col,
